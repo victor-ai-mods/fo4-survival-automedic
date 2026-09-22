@@ -1,447 +1,92 @@
-# Survival AutoMedic — как работает мод
+# Survival AutoMedic
 
-Короткое описание на английском — [`README.en.md`](README.en.md).
+A Fallout 4 mod for Survival mode. One press of the AutoMedic item — or nothing at all, if the
+automatic mode is on — and the mod closes every need you have at once: health, radiation,
+crippled limbs, hunger, thirst, diseases and addictions. It reads your state, picks a set of
+items from your inventory and takes them in one go, then shows a single summary.
 
-Описание составлено **по коду** 2026-09-22 (`papyrus/*.psc`, `data/mcm.json`, `tools/gen_esp.py`).
-Прежний план с историей решений — `docs/archive/PLAN-2026-09-22.md`; с кодом он расходится,
-на поведение мода не опирайтесь на него. Что осталось до публикации — `PLAN.md`.
+Written for the author's own Survival playthrough; the code is public domain, take what you like.
 
-**Состояние:** автор тестирует мод в игре и вносит отдельные правки. На Nexus он не опубликован.
+> **Status:** in testing, not released on Nexus Mods yet.
+>
+> Full documentation is in Russian: [`README.ru.md`](README.ru.md) describes how the mod actually
+> works, function by function, and [`PLAN.md`](PLAN.md) lists what is left before release.
 
----
+## What it does
 
-## 1. Что это
+- **Health.** Picks the set with the *least overheal*: with 80 HP missing, 40 + 50 beats a single
+  110. Healing already in progress is counted, so a fight does not eat your whole stock of
+  stimpaks (a stimpak heals over 50 seconds in Survival).
+- **Radiation** is handled before health, because radiation lowers your maximum health.
+- **Hunger and thirst** are closed by a loop: eat the cheapest thing, wait for the stage to
+  change, repeat. No sustenance tables are needed, so it works both with vanilla rules and with
+  Survival Configuration Menu.
+- **Crippled limbs:** one stimpak heals them all. Off in power armor by default, where crippling
+  does not hinder you.
+- **Diseases and addictions** are detected from the live effect snapshot, not from `HasSpell`
+  (which never sees a real addiction).
+- **Prevention, independent of the automatic mode:** herbal remedies before sleep and after
+  risky food, Rad-X when radiation rises fast for long enough.
+- **Automatic mode** (off by default) with its own health and radiation thresholds: a cheap
+  check every few seconds, a full check only when a threshold is actually crossed.
 
-Мод для режима Survival в Fallout 4. Одним нажатием предмета AutoMedic (или автоматически,
-если включён авторежим) закрывает сразу все нужды персонажа:
+It never treats companions and never touches items from other mods, quest items, or anything on
+your exclusion list.
 
-- здоровье (ОЗ);
-- радиацию;
-- покалеченные конечности;
-- голод и жажду;
-- болезни;
-- зависимости.
+## Requirements
 
-Набор предметов подбирается из инвентаря и принимается за один цикл. На экран выводится
-одна сводка.
+- Fallout 4 with Survival mode
+- [F4SE](https://f4se.silverlock.org/)
+- [Mod Configuration Menu](https://www.nexusmods.com/fallout4/mods/21497)
+- [Garden of Eden Papyrus Script Extender](https://www.nexusmods.com/fallout4/mods/74160)
 
-Отдельно от этого цикла, в фоне:
+**No DLC required.** Items from DLC you own are supported; items from DLC you do not own are
+skipped silently. One plugin, one master (`Fallout4.esm`).
 
-- перед сном и после рискованной еды мод пьёт травяные снадобья;
-- при быстром наборе радиации пьёт Рад-Х.
+## Settings
 
-Компаньонов мод не лечит. Предметы, которых нет в его таблице (модовая еда), не использует.
+Everything is in MCM, on eight pages: what to treat, automatic mode, health, hunger and thirst,
+radiation, prevention, items, diagnostics. Thresholds, reserves ("never spend my last two
+stimpaks"), a food reserve, a cap on how much radiation may be eaten, disease-risk limits,
+per-item exclusion lists, and a diagnostic log with three levels of detail.
 
-## 2. Состав
+Settings are read at the start of every cycle, so changes apply immediately.
 
-| Файл (от `Data\`) | Что это |
-|---|---|
-| `SurvivalAutoMedic.esp` | единственный мастер — `Fallout4.esm` |
-| `Scripts\AutoMedicScript.pex` | скрипт эффекта предмета: возвращает предмет и зовёт квест |
-| `Scripts\AutoMedicQuestScript.pex` | вся логика: цикл, планировщик, исполнение, авторежим, профилактика, лог |
-| `Scripts\AutoMedicTables.pex` | сгенерированная таблица предметов (352 ALCH ваниль + 6 DLC, 159 вариантов по перкам) и ролей эффектов |
-| `Scripts\AutoMedicSettings.pex` | свойства MCM (генерируется из `data/mcm.json`) |
-| `MCM\Config\SurvivalAutoMedic\config.json` | MCM, все тексты — токены `$AM_*` |
-| `Interface\Translations\SurvivalAutoMedic_{en,ru}.txt` | переводы MCM (UTF-16 LE + BOM, TAB) |
-| `SurvivalAutoMedic\exclusions-default.json` | список исключений, идёт с модом |
+English and Russian are included. A new language is one file in
+`Interface\Translations\` (UTF-16 LE with BOM, TAB-separated); nothing needs recompiling.
 
-Записи esp (`tools/gen_esp.py`):
+## Building from source
 
-| FormID | Запись | Назначение |
-|---|---|---|
-| `xx000804` | ALCH `AM_Tool` «AutoMedic» | предмет-инструмент на вкладке «Помощь». Ключевые слова `ObjectTypeStimpak` и `HC_IgnoreAsFood` (иначе Survival засчитывал бы его как еду или стимпак) |
-| `xx000803` | MGEF `AM_UseEffect` | эффект типа Script со скриптом `AutoMedicScript` |
-| `xx000805` | QUST `AM_Quest` | Start Game Enabled; скрипты `AutoMedicQuestScript` и `AutoMedicTables` |
-| `xx000808` | QUST `AM_Settings` | скрипт `AutoMedicSettings`, его свойства читает и пишет MCM |
-| `xx000806` | FLST `AM_AllConsumables` | в esp пустой, наполняется при сборке таблицы |
-| `xx000807` | GLOB `AM_TestMode` | режим нажатия, меняется из консоли (§11) |
-| `xx000800–802` | GLOB `AM_RadRate*`, `AM_LastAutoRunTime` | **не используются** (остались от плана) |
-
-**Зависимости:**
-
-- **F4SE.** Через `ObjectReference.GetInventoryItems()` читается инвентарь. Если F4SE не
-  ответил, есть запасной путь через GOEPE, но он медленнее. MCM без F4SE не работает вообще.
-- **Garden of Eden Papyrus Extender** — жёсткая зависимость. Из него берутся:
-  - `GetActiveEffects` — лечение «в полёте», болезни, зависимости;
-  - чтение и запись файлов (лог, исключения);
-  - запасной путь чтения инвентаря.
-- **MCM.**
-- **DLC не нужны.** Предметы DLC разрешаются в рантайме через `Game.GetFormFromFile`: нет
-  файла — строка таблицы молча пропускается.
-- **SCM (Survival Configuration Menu) поддерживается.** Голод и жажда закрываются замкнутым
-  циклом, поэтому неважно, как SCM считает насыщение.
-
-## 3. Жизненный цикл
-
-`OnQuestInit` и каждая загрузка сохранения (`OnPlayerLoadGame`) вызывают `Refresh`. Он:
-
-1. Пересобирает таблицу (`AutoMedicTables.BuildTables`), только если сменилась `DATA_VERSION`
-   (crc32 сгенерированного скрипта). Сборка — около 6 с, один раз; результат уезжает в сейв.
-2. Копирует таблицу в сам квест-скрипт (`CacheTables`), чтобы цикл не делал внешних вызовов
-   в чужой скрипт.
-3. Разрешает ~70 форм `Fallout4.esm`: AV, перки, эффекты болезней, снадобья, 25 спеллов
-   зависимостей, Рад-Х.
-4. Сбрасывает кеши сессии (цены, имена, перки) и перечитывает файлы исключений.
-5. Один раз за всю игру кладёт предмет AutoMedic в инвентарь. Если его потерять, вернуть
-   можно кнопкой в MCM.
-6. Запускает таймеры авторежима и Рад-Х, подписывается на `OnSit` и `OnItemEquipped` игрока.
-
-## 4. Что запускает цикл
-
-| Триггер | Как | Пороги |
-|---|---|---|
-| Применён предмет AutoMedic | `AutoMedicScript` сразу возвращает предмет → `OnToolUsed` → `RunCycle("item")` через `CallFunctionNoWait` | ручные («По нажатию») |
-| Авторежим | таймер → `AutoPoll` → `RunCycle("auto: …")` (§7) | свои пороги авторежима |
-| MCM «Записать снимок состояния» | `RunCycle("snapshot")`: только план, лог не ниже «Подробно» | ручные |
-| Консоль `set AM_TestMode to 2` | каждое нажатие — только план, без приёма | ручные |
-
-Одновременно идёт только один цикл (`AM_Busy`):
-
-- нажатие во время цикла выводит «предыдущий цикл ещё не закончен»;
-- цикл, который висит дольше 60 с без признаков жизни, считается брошенным, его место можно
-  занять.
-
-## 5. Цикл `RunCycle`
+The build needs an installed copy of Fallout 4: the item table is generated offline from the
+game's own records, because Papyrus cannot inspect `ALCH` items at runtime.
 
 ```
-TryBusy → LoadSettings → [авто: ApplyAutoMode, лог придержан]
-  → фаза 0: ReadValues, ReadPerks, ReadActiveEffects, BuildNeeds
-  → [авто и нужд нет → тихий выход, одна строка «пустой авто-цикл»]
-  → CollectCandidates → EvalCandidates → Plan → отчёт → Execute → итог → сводка на экран
+python tools/parse_consumables.py   # game data -> data/consumables.json
+python tools/gen_esp.py             # the plugin
+python tools/gen_psc.py             # the generated item table script
+python tools/gen_mcm.py             # MCM config, translations, settings script
+"<game>\Papyrus Compiler\PapyrusCompiler.exe" build/compile.ppj
+python tools/plan_sim.py            # offline planner tests
+python tools/deploy.py              # install into the game (with the game closed)
 ```
 
-Настройки копируются из `AM_Settings` в начале **каждого** цикла, так что изменения в MCM
-действуют сразу.
+Set `FO4_PATH` if your game is not in `D:\Games\Fallout 4`. In `build/compile.ppj`, `Release`
+and `Final` must stay `false`: a release build silently strips every `Debug` call, including
+notifications. See [`build/f4se_stubs/README.md`](build/f4se_stubs/README.md) for the one file
+you have to provide yourself.
 
-### 5.1. Фаза 0 — состояние
+Not in this repository, because it is either the game's content or regenerated on every build:
+`data/consumables.json`, `data/mgef_index.json`, the generated `.psc` files, the plugin, the
+compiled scripts and the MCM output.
 
-- **AV:**
-  - ОЗ и полный максимум (текущее ÷ доля);
-  - радиация;
-  - ОД;
-  - голод и жажда — стадии 0..5;
-  - сон;
-  - перегруз;
-  - бой;
-  - 7 конечностей: 0 = покалечена.
-- **Перки:**
-  - что читается: Medic, Lead Belly, Adamantium Skeleton, Chem Resistant, Party Boy/Girl,
-    Aquaboy/Aquagirl, бобблхед «Медицина»;
-  - перечитываются только при смене уровня, иначе раз в 10 мин (кеш).
-- **Снимок `GetActiveEffects`.** Одним вызовом даёт:
-  - **«в полёте»** — остаток ещё действующих эффектов: лечение (стимпак в Survival лечит
-    50 с), урон, вывод и набор радиации, ОД. Остаток = магнитуда × (длительность − прошло).
-    У вывода RadAway при бобблхеде ×1.1 (GOEPE отдаёт магнитуду без него). Из двух вариантов
-    лечения одного предмета по перку (GOEPE отдаёт оба) остаётся тот, что подходит по перку
-    (`HealVariants`);
-  - **статусы:** 6 болезней, зависимости (по спеллу `AbAddiction*` в MagicItem — `HasSpell`
-    их не видит), иммунодефицит, Рад-Х, активные снадобья.
+## Tools
 
-### 5.2. Нужды (`BuildNeeds`)
+`tools/` is a small offline toolkit that may be useful on its own: an ESM/ESP reader, a BA2
+reader, a `.STRINGS` reader, a condition (`CTDA`) parser and evaluator, an ESP writer with VMAD
+support, a `.pex` disassembler, and a Python mirror of the planner used for testing without the
+game. See [`tools/README.md`](tools/README.md) (Russian).
 
-- **Голод и жажда:** нужда есть, если стадия ≥ «начинать с»; величина = стадия − «есть/пить до».
-- **Радиация:** нужда есть, если радиация ≥ порога. Величина = радиация − «в полёте» − цель.
-  Шкала — 1000 рад.
-- **ОЗ.** Радиация срезает максимум ОЗ на 1 % за 10 рад. Поэтому порог ОЗ проверяется от
-  максимума **после вывода радиации**. Величина = цель % × потолок − текущие ОЗ −
-  (лечение в полёте − урон в полёте).
-- **Конечности:** число покалеченных. При Adamantium Skeleton 3 нужды нет. В силовой броне
-  нужды тоже нет, если не включено `LimbsInPowerArmor` (по умолчанию выкл.): штрафы там не
-  действуют, конечности лечатся после выхода из брони. То же в опросе авторежима.
-- **Болезни и зависимости:** есть или нет.
-- **ОД:** флаг «ОД ниже `ApItemsBelowPct`». Отдельного плана под него **нет** — он только
-  отпирает ОД-напитки (§5.3).
+## License
 
-Выключенная в MCM нужда получает недостижимый порог. Из нужд собирается маска назначений:
-в инвентаре ищутся только предметы под них. Туда же попадают:
-
-- средства вывода радиации при лечении ОЗ — лечащая еда может облучить;
-- еда при выводе радиации — RadAway вызывает голод;
-- питьё при стимпаке — стимпак вызывает жажду;
-- вся еда, если включён запас еды.
-
-### 5.3. Кандидаты (`CollectCandidates`, `EvalCandidates`)
-
-Один вызов `GetInventoryItems`. Дальше только `Potion`, найденные в таблице, и только под
-нужные назначения. `GetItemCount` вызывается лишь у прошедших отбор.
-
-**Никогда не используются:**
-- чёрный список таблицы;
-- предметы из файлов исключений;
-- боеприпасы шприцемёта;
-- стимпаки и антирадин, если их трата выключена в MCM;
-- аддиктивная химия и алкоголь, если выключены;
-- предметы с риском болезни выше `MaxDiseaseRiskPct`;
-- предметы дороже `MaxItemValue`.
-
-Оценка под этого персонажа:
-
-- **Medic и бобблхед.** Medic *прибавляет* к магнитуде стимпака/RadAway (+2/+6/+10/+27.34
-  %/с, для RadAway ×10). Ранг 4 ещё −2 с длительности. Бобблхед даёт ×1.1.
-- **Лечение едой с перком** (журналы Wasteland Survival, Cannibal) — вариант из таблицы
-  заменяет базовое лечение.
-- **Lead Belly:** радиация еды ×0.45 / ×0.35 / ×0 по рангам.
-- **Еда, съеденная голодным, не действует вообще** (перк Survival
-  `HC_SustenanceEffectsTurnOffFood`). Еда (`ObjectTypeFood` без `HC_IgnoreAsFood`)
-  принимается только после цикла голода. Если голод до «Сыт» не закрыть, её лечение и вывод
-  радиации считаются нулём.
-- **ОД-напитки** — предметы, дающие больше 10 % максимума ОД (Ядер-Колы, Vim):
-  - заперты для **всех** нужд, включая циклы голода и жажды;
-  - отпираются, только если ОД ниже `ApItemsBelowPct` и позволяет `ApItemsMode`
-    (никогда / только в бою / всегда).
-- **Резервы:**
-  - последние `ReserveStimpaks` стимпаков и `ReserveRadAway` антирадинов не трогаются;
-  - `FoodReserve`: запас еды не тратится на ОЗ, радиацию и излечение (сам голод его есть
-    может); облучённая еда входит в запас по `FoodReserveCountRad`;
-  - `ColaReserve`: последние N Ядер-Кол не тратит никто.
-
-### 5.4. План (`Plan`)
-
-Голод и жажда **не планируются**: их закрывают замкнутые циклы исполнения (§5.5). План —
-список штук, не больше 12. Стадии по порядку:
-
-1. **A — радиация.** Жадно, по выгоде на цену:
-   - выгода = min(вывод, остаток) − набор радиации;
-   - предмет с баллом ниже 0.5 не берётся: хвост в 20 рад не стоит целого RadAway;
-   - если антирадин уже действует, добирается только недостающее.
-2. **B — конечности.** Самый дешёвый стимпак, лечащий в процентах: один лечит все
-   конечности. Если стимпак уже действует, второй не берётся.
-3. **D — болезни и зависимости.** По одному самому дешёвому средству; попутное лечение ОЗ
-   даёт скидку.
-4. **C — здоровье.** Перебор наборов (`HealSearch`, до 1000 узлов) с **минимальным
-   перелечением**: «осталось 80 → 40 + 50 лучше одной на 110». Наборы сравниваются
-   по порядку:
-   1. добран ли;
-   2. потери ОЗ (перелечение плюс потолок, съеденный радиацией еды);
-   3. число штук;
-   4. цена — только как последний тай-брейк.
-
-   Грязная вода и прочее с немедленной проверкой на болезнь ради ОЗ не берутся.
-5. **A′/C′.** Если лечащая еда подняла радиацию выше порога, добирается вывод и
-   пересчитывается ОЗ.
-6. **Обрезка.** По одной выбрасывается самая дорогая строка ОЗ или радиации, без которой
-   ни одна нужда не ухудшается.
-
-**Цена штуки (в крышках):**
-- цена предмета;
-- +5 за штуку;
-- +5 за 1 % риска болезни (×2 при немедленной проверке);
-- +60 за иммунодефицит (+15, если он уже есть);
-- +10 ÷ остаток — последние штуки ценнее.
-
-**Ограничения по радиации:**
-- за цикл едой набирается не больше `MaxIngestedRads`;
-- если вывести радиацию нечем и включён `RadCapWithoutCure`, порог вывода не переходится.
-
-### 5.5. Исполнение (`Execute`)
-
-Предметы принимаются только через `EquipItem(item, false, true)`: `GardenOfEden.DrinkPotion`
-предмет не тратит, и Survival его не видит. После приёма мод ждёт, пока штука уйдёт из
-инвентаря (до 2 с).
-
-Порядок:
-
-1. стимпак на конечности;
-2. вывод радиации (не едой);
-3. пауза 1 с, если что-то было принято: голод от RadAway и жажду от стимпака Survival
-   засчитывает асинхронно;
-4. **цикл голода**, затем **цикл жажды**. Схема: самое дешёвое → принять → ждать смены
-   стадии до 1.5 с → повторить, пока стадия выше цели:
-   - цена — крышки + риск болезни + радиация в ОЗ потолка;
-   - сначала берутся штуки, не нужные плану;
-   - остановка: `MaxItemsPerNeed` штук, 7 штук подряд без сдвига стадии, или подходящее
-     кончилось;
-5. рад-еда, затем **добор ОЗ с перепроверкой**. Нужда пересчитывается по живым ОЗ, текущему
-   максимуму (голод и жажда режут Выносливость, после циклов максимум растёт) и новому
-   снимку «в полёте». Лишние строки пропускаются;
-6. средства от болезней и зависимостей.
-
-Перед каждой строкой плана проверяется:
-- еда, если голод так и не закрыт, пропускается;
-- запасы еды и колы — по живому остатку.
-
-Итог: строки `AFTER`, `SPENT`, `UNMET` в лог и одна сводка на экран.
-
-## 6. Бой
-
-Отдельной логики «в бою» у цикла нет: в бою устраняется всё то же, что и вне боя
-(решение автора 2026-09-22).
-
-Бой влияет только на три вещи:
-- тумблер «Лечить в бою» выключает авторежим в бою целиком;
-- `ApItemsMode` = «только в бою» отпирает ОД-напитки только в бою;
-- в логе и триггере появляется пометка «бой».
-
-## 7. Авторежим
-
-Выключен по умолчанию. Таймер `TIMER_AUTO` идёт всегда: при выключенном режиме раз в 5 с
-читается один флаг, так что включение в MCM подхватывается сразу.
-
-При включённом режиме раз в `AutoPollSec` (по умолчанию 2 с) работает `AutoPoll`.
-Инвентарь он не читает, только несколько `GetValue`.
-
-**Опрос пропускается, если:**
-- идёт другой цикл;
-- включено «Только план»;
-- открыто меню;
-- с конца прошлого цикла прошло меньше 3 с;
-- игрок мёртв, истекает кровью или в сцене;
-- идёт бой, а «Лечить в бою» выключено.
-
-**Причины запустить цикл:**
-- ОЗ ниже `AutoHealTriggerPct` — от максимума после вывода радиации;
-- радиация выше `AutoRadTriggerPct`;
-- если включён тумблер «Также…»:
-  - голод или жажда на стадии «начинать с»;
-  - покалеченная конечность;
-  - раз в 30 с — проверка «status» (болезни и зависимости видны только в снимке эффектов).
-
-Если ни одна причина не сработала, дальше ничего не происходит.
-
-**Запуск цикла.** `RunCycle` с пометкой режима. `ApplyAutoMode` подменяет пороги ОЗ и
-радиации на авто (по умолчанию 30 → 80 % и 30 → 10 %). Если «Также…» выключено, голод,
-жажда, конечности, болезни и зависимости в этом цикле выключены.
-
-**Тишина:**
-- нужд не оказалось (или всё уже «в полёте») — лог выбрасывается, остаётся одна строка
-  «пустой авто-цикл» с разбивкой времени (в файл не чаще раза в минуту);
-- уведомление `AutoMedic (авто): …` появляется только если что-то принято.
-
-**Повтор.** Если цикл ничего не принял, мод запоминает незакрытые нужды и сколько у игрока
-предметов из списка каждой нужды (7 списков `AM_List*` в esp, наполняются вместе с таблицей;
-один `GetItemCount(список)` на нужду). Дальше:
-- каждый опрос, пока нужда не закрыта (и в паузе `AutoRetrySec`, и после неё), сверяет эти
-  числа: средств прибавилось — полная проверка сразу (в триггере «новое: disease 0->1»);
-- проверка болезней раз в 30 с останавливается на снимке эффектов («проверка пропущена»), пока
-  нужды не шире прежних, болезней и зависимостей не больше, настройки не менялись и средств не
-  прибавилось; полная проверка всё равно не реже раза в 5 минут;
-- если `GetItemCount(список)` = 0 при кандидатах в инвентаре, счёт по спискам выключается до
-  загрузки (предупреждение в логе).
-
-Пауза снимается и если стало хуже:
-- сработал новый порог;
-- ОЗ упали на 10 п.п.;
-- радиация выросла на 50;
-- голод или жажда выросли;
-- покалечена новая конечность;
-- начался или кончился бой.
-
-## 8. Профилактика (работает и без авторежима)
-
-- **Травяные снадобья** (антимикробное, стимулирующее, болеутоляющее).
-  - Мод пьёт только те, чей эффект сейчас не действует.
-  - Только в Survival и только при включённых болезнях.
-  - Когда:
-    - `HerbalsBeforeSleep` — `OnSit` на мебели с `IsSleepFurniture`, то есть до броска
-      на болезнь при засыпании;
-    - `HerbalsAfterRisk` — через 0.5 с после приёма предмета с риском болезни > 0 (свой
-      или мода): серия приёмов даёт один доприём.
-- **Рад-Х.**
-  - Свой таймер: радиация читается раз в 1 с (раз в 10 с, если выключено).
-  - Рад-Х пьётся, если скорость набора ≥ `RadXRatePerSec` рад/с (0.1–10, по умолчанию 2)
-    держится **не меньше `RadXSeconds` секунд подряд** (1–60, по умолчанию 8) и Рад-Х ещё
-    не действует. Разовая облучённая еда даёт одну «горячую» секунду и не считается.
-  - Во время цикла мода и в меню счёт сбрасывается.
-
-## 9. Настройки MCM
-
-Все свойства лежат на `AM_Settings`; значения по умолчанию заданы инициализаторами. Страницы:
-
-| Страница | Настройки (по умолчанию) |
-|---|---|
-| Главное | что лечить: ОЗ, конечности, радиация, голод, жажда, болезни, зависимости (всё вкл.); конечности в силовой броне (выкл.); сводка на экране (Сводка); «Только план» (выкл.); кнопка «Выдать предмет AutoMedic» |
-| Автоматический режим | авторежим (выкл.); лечить в бою (вкл.); также голод/жажда/конечности/болезни/зависимости (вкл.); ОЗ 30 → 80 %; радиация 30 → 10 %; опрос 2 с; повтор 60 с |
-| Здоровье | по нажатию: ОЗ 90 → 100 %; тратить стимпаки (вкл.); резерв стимпаков 2 |
-| Голод и жажда | начинать есть/пить с «Лёгкого голода»/«Лёгкой жажды», до «Сыт»/«Жажды нет»; запас еды 10 (с облучённой); не больше 12 штук за нажатие; риск болезни ≤ 7 % |
-| Радиация | по нажатию: 15 → 0 %; тратить антирадин (вкл.), резерв 1; набирать едой ≤ 50 рад; «нечем выводить — не выше порога» (вкл.) |
-| Профилактика | снадобья перед сном (вкл.) и после рискованной еды (вкл.); Рад-Х при быстром наборе (вкл.): от 2.0 рад/с (шаг 0.1) не меньше 8 с |
-| Предметы | не дороже 150 крышек; аддиктивная химия (выкл.); алкоголь (выкл.); ОД-напитки: только в бою, при ОД < 30 %; запас колы 0; списки исключений (вкл.), кнопка «Перечитать» |
-| Диагностика | лог в свой файл; уровень «Сводка»; кнопка «Записать снимок»; кнопка «Сбросить все настройки» |
-
-Имена функций кнопок (`McmGiveTool`, `McmReloadExclusions`, `McmSnapshot`, `ResetDefaults`)
-вызываются из `config.json` по имени — **не переименовывать**. Весь MCM генерируется
-`tools/gen_mcm.py` из `data/mcm.json`. Новый язык — один файл перевода, esp и скрипты не
-трогаются.
-
-## 10. Исключения
-
-Формат — как у LootMan: `"Плагин.esm|ЛокальныйHexID"`, одна запись на строку, строки
-`_comment` пропускаются. Файлы:
-
-- `exclusions-default.json` — идёт с модом, обновлением перезаписывается. Сейчас в нём
-  культуры для посадки в поселениях и смоляника для ягодных ментатов;
-- `exclusions-user.json` — файл игрока, по желанию.
-
-Всего до 128 форм. Записи для отсутствующих плагинов молча пропускаются. Файлы читаются при
-каждой загрузке и кнопкой в MCM.
-
-## 11. Лог и отладка
-
-- **Куда** (`LogTarget`):
-  - свой файл `Data\SurvivalAutoMedic\AutoMedic.log` (по умолчанию). Пишется через GOEPE,
-    не требует логов Papyrus, читается прямо во время игры. Ротация `.1`/`.2` только по
-    размеру (512 КБ); при загрузке файл не обнуляется, загрузка отбивается разделителем;
-  - лог Papyrus `Logs\Script\User\AutoMedic.0.log`;
-  - оба или никуда.
-- **Уровни:**
-  - Сводка: заголовок цикла, `SETTINGS` (при смене), `STATE`, `NEED`, `AFTER`, `SPENT`,
-    `UNMET`, `END` с разбивкой времени;
-  - Подробно: плюс `CANDS`, `PLAN`, `TRIM`, `COVER`, `ORDER`, `USE`, `SKIP`, `RECHECK`,
-    `MODE`;
-  - Трассировка: плюс каждый кандидат с ценой, `PICK` и `HEAL` (перебор), `EFFECT`, `TIME`,
-    сверка статусов с `HasMagicEffect`. После ручного цикла ещё 60 с строк `WATCH`
-    (изменения AV и эффектов по секундам).
-- **Консоль** `set AM_TestMode to N`:
-  - 0 — обычно;
-  - 1 — тест A16 (одна вода через `DrinkPotion` и одна через `EquipItem`);
-  - 2 — только план.
-- **Снимок состояния** (кнопка MCM) — план без приёма в лог. Его стоит прикладывать к
-  сообщениям об ошибках.
-
-## 12. Чего в моде нет (на 2026-09-22)
-
-- **ОД как самостоятельная нужда.** Опрос авторежима ОД не читает, отдельной стадии плана
-  «восполнить ОД» нет. ОД-напитки только отпираются как источник ОЗ и питья.
-- Кофе против усталости, перехват сна кроме снадобий, бафы переноски при перегрузе.
-- Лечение компаньонов, модовая еда вне таблицы.
-- Глобалы `AM_RadRateLastSample/Time`, `AM_LastAutoRunTime` и поля таблицы `HealSeconds`,
-  `AddictionChance`, `chanceEffects` не используются.
-
-## 13. Сборка
-
-Команды и модули — `tools/README.md`. Коротко:
-
-```
-python tools/parse_consumables.py   # esm -> data/consumables.json (нужно только при смене игровых данных)
-python tools/gen_esp.py             # build/SurvivalAutoMedic.esp
-python tools/gen_psc.py             # papyrus/AutoMedicTables.psc
-python tools/gen_mcm.py             # MCM, переводы, AutoMedicSettings.psc
-"D:\Games\Fallout 4\Papyrus Compiler\PapyrusCompiler.exe" build/compile.ppj
-python tools/plan_sim.py            # зеркало планировщика на Python, офлайн-проверка
-python tools/deploy.py              # разложить по игре (только при закрытой игре)
-```
-
-В `compile.ppj` `Release`/`Final` обязаны быть `false`: иначе компилятор вырезает весь
-`Debug`, включая `Notification`.
-
-Путь к игре по умолчанию — `D:\Games\Fallout 4`; другой задаётся переменной окружения
-`FO4_PATH` (в `build/compile.ppj` пути правятся вручную).
-
-В репозиторий не входит то, что собирается заново: `data/consumables.json` и
-`data/mgef_index.json` (данные из файлов игры), `papyrus/AutoMedicTables.psc`,
-`papyrus/AutoMedicSettings.psc`, `build/SurvivalAutoMedic.esp`, `build/scripts/`,
-`build/mcm/`, `reports/`. Поэтому для сборки нужна установленная игра.
-
-## 15. Лицензия
-
-The Unlicense: код передан в общественное достояние, делайте с ним что угодно.
-
-## 14. Другие документы
-
-| Файл | Что там | Актуальность |
-|---|---|---|
-| `PLAN.md` | инструкции к публикации на Nexus | актуален |
-| `docs/verified.md` | механики Survival, проверенные в игре (шаг 4) | справочник, факты верны |
-| `docs/planner.md`, `docs/execution.md`, `docs/mcm.md`, `docs/auto.md` | протоколы приёмки этапов | исторические; поведение с тех пор менялось, сверяться с этим файлом |
-| `docs/GOEPE/` | документация Garden of Eden Papyrus Extender | справочник |
-| `docs/archive/PLAN-2026-09-22.md` | исходный план | архив |
+[The Unlicense](LICENSE) — public domain. Do whatever you want with this code; no attribution
+required.
