@@ -1,0 +1,29 @@
+{
+    "_comment": "Survival AutoMedic: items the mod never uses. Format as in LootMan: Plugin.esm|LocalHexID, one entry per line.",
+    "_comment": "This file is overwritten by mod updates. Put your own entries into exclusions-user.json in this folder (copy this file and edit).",
+    "_comment": "Entries for plugins you do not have (DLC) are skipped silently. Reload in MCM: Items - Reload exclusion lists.",
+
+    "_comment": "Crops planted in settlements (keep them as seeds)",
+    "_comment": "Fallout4.esm|0F742E = Carrot",
+    "_comment": "Fallout4.esm|0330F8 = Corn",
+    "_comment": "Fallout4.esm|0FAFEB = Melon",
+    "_comment": "Fallout4.esm|1A0042 = Melon (second record)",
+    "_comment": "Fallout4.esm|0E0043 = Razorgrain",
+    "_comment": "Fallout4.esm|09DCC4 = Tato",
+    "_comment": "Fallout4.esm|033102 = Mutfruit",
+    "_comment": "Fallout4.esm|0EF24D = Gourd",
+    "_comment": "Fallout4.esm|173B13 = Gourd (second record)",
+    "_comment": "Fallout4.esm|0D981D = Tarberry (also Berry Mentats)",
+    "exclude": [
+        "Fallout4.esm|0F742E",
+        "Fallout4.esm|0330F8",
+        "Fallout4.esm|0FAFEB",
+        "Fallout4.esm|1A0042",
+        "Fallout4.esm|0E0043",
+        "Fallout4.esm|09DCC4",
+        "Fallout4.esm|033102",
+        "Fallout4.esm|0EF24D",
+        "Fallout4.esm|173B13",
+        "Fallout4.esm|0D981D"
+    ]
+}

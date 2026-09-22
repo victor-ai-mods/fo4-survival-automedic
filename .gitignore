@@ -1,0 +1,24 @@
+# Данные, извлечённые из файлов игры: пересоздаются tools/parse_consumables.py
+data/consumables.json
+data/mgef_index.json
+data/perk_ids.json
+reports/
+
+# Сгенерированное: см. README, раздел «Сборка»
+papyrus/AutoMedicTables.psc
+papyrus/AutoMedicSettings.psc
+build/SurvivalAutoMedic.esp
+build/scripts/
+build/mcm/
+
+# Чужая документация (Garden of Eden Papyrus Extender) — идёт со своим модом
+docs/GOEPE/
+
+# Ванильный исходник Bethesda с дописанным объявлением F4SE (как его получить —
+# build/f4se_stubs/README.md)
+build/f4se_stubs/ObjectReference.psc
+
+# Логи мода и игры, временные файлы
+*.log
+__pycache__/
+*.pyc

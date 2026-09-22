@@ -1,0 +1,430 @@
+Scriptname AutoMedicTables extends Quest
+
+; =====================================================================
+;  ЭТОТ ФАЙЛ СОБИРАЕТСЯ АВТОМАТИЧЕСКИ — правки руками будут потеряны.
+;    логика  -> tools/templates/AutoMedicTables.psc.in
+;    данные  -> data/consumables.json  (шаг 1 плана)
+;    сборка  -> python tools/gen_psc.py
+; %%STAMP%%
+; =====================================================================
+;
+; Зачем это нужно. В Fallout 4 у Papyrus НЕТ интроспекции ALCH: `Potion`
+; наследует только `Form`, перечислить эффекты предмета в рантайме нельзя
+; (§3 плана). Поэтому числа считаются офлайн парсером esm и приезжают сюда
+; константами.
+;
+; Почему таблица разбита на чанки. Массив Papyrus создаётся не длиннее 128
+; элементов, а предметов больше трёхсот — отсюда `ItemChunk()` и арифметика
+; `index / CHUNK_SIZE`.
+;
+; Почему формы DLC резолвятся в рантайме, а не лежат в esp. `FormList` с
+; предметом из DLC потребовал бы этот DLC в мастерах плагина. Вместо этого
+; таблица хранит пару «локальный FormID + имя файла», а `BuildTables()`
+; прогоняет их через `Game.GetFormFromFile()`: файла нет — форма молча
+; пропускается, и мастер по-прежнему нужен ровно один (§8.1).
+
+; Пустой в esp, наполняется на BuildTables().
+FormList Property AM_AllConsumables Auto Const Mandatory
+; Списки по нужде (2026-09-22), тоже пустые в esp: какие предметы годятся под
+; ОЗ, радиацию, голод, жажду, болезни, зависимости, конечности. Авторежим
+; одним GetItemCount(список) видит, что появилось средство от незакрытой нужды.
+FormList Property AM_ListHP Auto Const Mandatory
+FormList Property AM_ListRads Auto Const Mandatory
+FormList Property AM_ListHunger Auto Const Mandatory
+FormList Property AM_ListThirst Auto Const Mandatory
+FormList Property AM_ListDisease Auto Const Mandatory
+FormList Property AM_ListAddiction Auto Const Mandatory
+FormList Property AM_ListLimbs Auto Const Mandatory
+
+; --- роли эффектов ---------------------------------------------------
+%%ROLES%%
+
+; --- биты поля Flags -------------------------------------------------
+%%FLAGS%%
+
+; --- размеры таблиц --------------------------------------------------
+%%SIZES%%
+
+Struct ItemData
+    ; Item == None — предмет из не установленного DLC, использовать нельзя.
+    Form Item
+    Int LocalId
+    ; Индекс в PluginFiles().
+    Int PluginId
+    Float HealHP
+    ; ПРОЦЕНТ от максимума ОЗ, а не доля: у стимпака здесь 30.0 = 30 %.
+    ; Масштабируется перком Medic в рантайме (M7).
+    Float HealPctOfMax
+    ; 0 = мгновенно. Растяжение лечения в Survival (M6) в esm не записано —
+    ; остаток лечения берётся из GetActiveEffects, а не считается отсюда.
+    Float HealSeconds
+    Float RadsAdd
+    Float RadsRemove
+    Float ApRestore
+    Float AddictionChance
+    Int DiseaseRiskPct
+    Int Flags
+    ; Эффект, который усиливают перк Medic и бобблхед «Медицина» (M7): его
+    ; магнитуда и длительность в esm. Medic прибавляет к магнитуде, поэтому
+    ; рантайм вычитает этот вклад из HealPctOfMax / RadsRemove и считает заново.
+    ; 0 — у предмета такого эффекта нет.
+    Float MedicHealMag
+    Float MedicHealDur
+    Float MedicRadMag
+    Float MedicRadDur
+    ; Полный FormID с индексом загрузки — считается в BuildTables(). По нему
+    ; инвентарь (GetNthItemFormID) находит строку без Game.GetForm и HasForm:
+    ; каждый такой вызов ждёт кадра (шаг 5, замер шага 3 — 76 мс на предмет).
+    Int FullId
+EndStruct
+
+Struct PerkVariant
+    Int ItemIndex
+    Int Role
+    ; Величина эффекта, когда перк есть: заменяет базовую, а не складывается с ней.
+    Float Amount
+    ; Локальные FormID перков в Fallout4.esm; условие — «любой из них». 0 = пусто.
+    Int Perk1
+    Int Perk2
+    Int Perk3
+EndStruct
+
+Struct ChanceEffect
+    Int ItemIndex
+    Int Role
+    Int ChancePct
+    Float Amount
+EndStruct
+
+; Эффект, по которому считается недоставленное «в полёте» (§5): лечение,
+; вывод и набор радиации, ОД. Снимок GetActiveEffects даёт MagicEffect, а
+; роль эффекта рантайм узнать не может — она приезжает отсюда.
+Struct EffectData
+    MagicEffect Effect
+    Int LocalId
+    Int PluginId
+    Int Role
+EndStruct
+
+; --- кеш, собранный BuildTables() (уезжает в сейв) --------------------
+%%CACHE_VARS%%
+EffectData[] AM_Effects
+
+Int AM_Resolved = 0
+Int AM_Skipped = 0
+; Разрешились, но индекс загрузки файла не нашёлся: такие предметы инвентарь
+; не увидит. Должно быть 0 — пишется в лог при сборке.
+Int AM_NoFullId = 0
+Int AM_BuiltVersion = 0
+
+; =====================================================================
+;  Сборка
+; =====================================================================
+
+Bool Function IsBuilt()
+    Return AM_BuiltVersion == DATA_VERSION
+EndFunction
+
+Int Function ResolvedCount()
+    Return AM_Resolved
+EndFunction
+
+Int Function SkippedCount()
+    Return AM_Skipped
+EndFunction
+
+Int Function NoFullIdCount()
+    Return AM_NoFullId
+EndFunction
+
+; Разрешает формы и раскладывает таблицу по чанкам. Идемпотентна: повторный
+; вызов без abForce ничего не делает, пока версия данных не изменилась.
+Function BuildTables(Bool abForce = false)
+    If IsBuilt() && !abForce
+        Return
+    EndIf
+
+    AM_AllConsumables.Revert()
+    AM_ListHP.Revert()
+    AM_ListRads.Revert()
+    AM_ListHunger.Revert()
+    AM_ListThirst.Revert()
+    AM_ListDisease.Revert()
+    AM_ListAddiction.Revert()
+    AM_ListLimbs.Revert()
+    AM_Resolved = 0
+    AM_Skipped = 0
+    AM_NoFullId = 0
+
+    String[] files = PluginFiles()
+    ; Индекс загрузки каждого файла; -1 — ещё не найден (или файла нет).
+    Int[] loadIndex = new Int[files.Length]
+    Int f = 0
+    While f < files.Length
+        loadIndex[f] = -1
+        f += 1
+    EndWhile
+    Int chunk = 0
+    While chunk < ITEM_CHUNKS
+        ItemData[] rows = RawItems(chunk)
+        Int i = 0
+        While i < rows.Length
+            Form found = Game.GetFormFromFile(rows[i].LocalId, files[rows[i].PluginId])
+            If found != None
+                rows[i].Item = found
+                Int pid = rows[i].PluginId
+                If loadIndex[pid] < 0
+                    loadIndex[pid] = FindLoadIndex(found, rows[i].LocalId)
+                EndIf
+                If loadIndex[pid] >= 0
+                    rows[i].FullId = loadIndex[pid] * 16777216 + rows[i].LocalId
+                Else
+                    AM_NoFullId += 1
+                EndIf
+                AM_AllConsumables.AddForm(found)
+                AddToNeedLists(found, rows[i])
+                AM_Resolved += 1
+            Else
+                AM_Skipped += 1
+            EndIf
+            i += 1
+        EndWhile
+        SetItemChunk(chunk, rows)
+        chunk += 1
+    EndWhile
+
+    ; Эффекты — один чанк: их меньше CHUNK_SIZE (генератор это проверяет).
+    AM_Effects = RawEffects()
+    Int e = 0
+    While e < AM_Effects.Length
+        AM_Effects[e].Effect = Game.GetFormFromFile(AM_Effects[e].LocalId,                                                     files[AM_Effects[e].PluginId]) as MagicEffect
+        e += 1
+    EndWhile
+
+    chunk = 0
+    While chunk < PERK_CHUNKS
+        SetPerkChunk(chunk, RawPerks(chunk))
+        chunk += 1
+    EndWhile
+
+    chunk = 0
+    While chunk < CHANCE_CHUNKS
+        SetChanceChunk(chunk, RawChances(chunk))
+        chunk += 1
+    EndWhile
+
+    AM_BuiltVersion = DATA_VERSION
+EndFunction
+
+; Те же признаки, что UsesOf в AutoMedicQuestScript (без учёта перков и настроек).
+; Чёрный список — мимо: мод его не тронет никогда, и прибавка такого предмета
+; (служебные «Антибиотики» 249F2C из консоли) не должна будить проверку.
+Function AddToNeedLists(Form akItem, ItemData akData)
+    If HasFlag(akData.Flags, FLAG_BLACKLISTED)
+        Return
+    EndIf
+    If akData.HealHP > 0.0 || akData.HealPctOfMax > 0.0
+        AM_ListHP.AddForm(akItem)
+    EndIf
+    If akData.RadsRemove > 0.0
+        AM_ListRads.AddForm(akItem)
+    EndIf
+    If HasFlag(akData.Flags, FLAG_SATES_HUNGER)
+        AM_ListHunger.AddForm(akItem)
+    EndIf
+    If HasFlag(akData.Flags, FLAG_SATES_THIRST)
+        AM_ListThirst.AddForm(akItem)
+    EndIf
+    If HasFlag(akData.Flags, FLAG_CURES_DISEASE)
+        AM_ListDisease.AddForm(akItem)
+    EndIf
+    If HasFlag(akData.Flags, FLAG_CURES_ADDICTION)
+        AM_ListAddiction.AddForm(akItem)
+    EndIf
+    If HasFlag(akData.Flags, FLAG_CAT_STIMPAK) && akData.HealPctOfMax > 0.0
+        AM_ListLimbs.AddForm(akItem)
+    EndIf
+EndFunction
+
+; Список под нужду по биту USE_* AutoMedicQuestScript (1 hp, 2 rads, 4 hunger,
+; 8 thirst, 16 disease, 32 addiction, 128 limbs) или None.
+FormList Function NeedList(Int aiUse)
+    If aiUse == 1
+        Return AM_ListHP
+    ElseIf aiUse == 2
+        Return AM_ListRads
+    ElseIf aiUse == 4
+        Return AM_ListHunger
+    ElseIf aiUse == 8
+        Return AM_ListThirst
+    ElseIf aiUse == 16
+        Return AM_ListDisease
+    ElseIf aiUse == 32
+        Return AM_ListAddiction
+    ElseIf aiUse == 128
+        Return AM_ListLimbs
+    EndIf
+    Return None
+EndFunction
+
+; Индекс загрузки файла, которому принадлежит akFound: перебор старшего
+; байта, пока Game.GetForm(полный ID) не вернёт ту же форму. Узнать FormID
+; формы напрямую нельзя — Form.GetFormID есть только в F4SE, а его исходников
+; в сборке нет. Файлы таблицы — только .esm (Fallout4 и DLC), они грузятся
+; первыми, так что это единицы вызовов на файл. -1 — не нашли.
+Int Function FindLoadIndex(Form akFound, Int aiLocalId)
+    Int idx = 0
+    While idx < 254
+        If Game.GetForm(idx * 16777216 + aiLocalId) == akFound
+            Return idx
+        EndIf
+        idx += 1
+    EndWhile
+    Return -1
+EndFunction
+
+; =====================================================================
+;  Доступ
+; =====================================================================
+
+; Данные предмета по индексу в таблице. Индекс вне диапазона даёт пустую
+; структуру с Item == None — вызывающему достаточно проверить Item.
+ItemData Function GetItemData(Int aIndex)
+    If aIndex < 0 || aIndex >= ITEM_COUNT
+        ItemData empty = new ItemData
+        Return empty
+    EndIf
+    ItemData[] rows = ItemChunk(aIndex / CHUNK_SIZE)
+    Return rows[aIndex % CHUNK_SIZE]
+EndFunction
+
+; Индекс предмета в таблице или -1. Поиск идёт по кешу (FindStruct — нативный),
+; а не по FormList: в списке лежат только разрешившиеся формы, и его индексы
+; с индексами таблицы не совпадают.
+Int Function IndexOf(Form akItem)
+    If akItem == None
+        Return -1
+    EndIf
+    Int chunk = 0
+    While chunk < ITEM_CHUNKS
+        ItemData[] rows = ItemChunk(chunk)
+        Int slot = rows.FindStruct("Item", akItem, 0)
+        If slot >= 0
+            Return chunk * CHUNK_SIZE + slot
+        EndIf
+        chunk += 1
+    EndWhile
+    Return -1
+EndFunction
+
+; То же по полному FormID (из GardenOfEden.GetNthItemFormID). Только
+; FindStruct — ни одного вызова, ждущего кадра.
+Int Function IndexOfFullId(Int aiFormId)
+    If aiFormId == 0
+        Return -1
+    EndIf
+    Int chunk = 0
+    While chunk < ITEM_CHUNKS
+        ItemData[] rows = ItemChunk(chunk)
+        Int slot = rows.FindStruct("FullId", aiFormId, 0)
+        If slot >= 0
+            Return chunk * CHUNK_SIZE + slot
+        EndIf
+        chunk += 1
+    EndWhile
+    Return -1
+EndFunction
+
+; Роль активного эффекта (ROLE_*) или ROLE_NONE, если эффект нам не интересен.
+Int Function EffectRole(MagicEffect akEffect)
+    If akEffect == None || AM_Effects == None
+        Return ROLE_NONE
+    EndIf
+    Int slot = AM_Effects.FindStruct("Effect", akEffect, 0)
+    If slot < 0
+        Return ROLE_NONE
+    EndIf
+    Return AM_Effects[slot].Role
+EndFunction
+
+Int Function EffectCount()
+    If AM_Effects == None
+        Return 0
+    EndIf
+    Return AM_Effects.Length
+EndFunction
+
+; Сам массив (по ссылке): AutoMedicQuestScript держит его у себя, чтобы
+; не делать внешний вызов EffectRole на каждый активный эффект.
+EffectData[] Function GetEffects()
+    Return AM_Effects
+EndFunction
+
+; Быстрая проверка членства без вычисления индекса.
+Bool Function IsKnown(Form akItem)
+    Return AM_AllConsumables.HasForm(akItem)
+EndFunction
+
+; Только для однобитных масок. Битовых операций в ванильном Papyrus нет,
+; а тянуть ради одной проверки F4SE-расширение Math не хочется.
+Bool Function HasFlag(Int aFlags, Int aMask) global
+    Return (aFlags / aMask) % 2 == 1
+EndFunction
+
+; Варианты эффекта, включающиеся перками (M7). Пусто для большинства предметов.
+PerkVariant[] Function GetPerkVariants(Int aItemIndex)
+    PerkVariant[] out = new PerkVariant[0]
+    Int chunk = 0
+    While chunk < PERK_CHUNKS
+        PerkVariant[] rows = PerkChunk(chunk)
+        Int i = rows.FindStruct("ItemIndex", aItemIndex, 0)
+        While i >= 0
+            out.Add(rows[i], 1)
+            ; Стартовый индекс за концом массива Papyrus считает ошибкой.
+            If i + 1 < rows.Length
+                i = rows.FindStruct("ItemIndex", aItemIndex, i + 1)
+            Else
+                i = -1
+            EndIf
+        EndWhile
+        chunk += 1
+    EndWhile
+    Return out
+EndFunction
+
+; Эффекты по броску GetRandomPercent — оценка риска для ветки радиации.
+ChanceEffect[] Function GetChanceEffects(Int aItemIndex)
+    ChanceEffect[] out = new ChanceEffect[0]
+    Int chunk = 0
+    While chunk < CHANCE_CHUNKS
+        ChanceEffect[] rows = ChanceChunk(chunk)
+        Int i = rows.FindStruct("ItemIndex", aItemIndex, 0)
+        While i >= 0
+            out.Add(rows[i], 1)
+            ; Стартовый индекс за концом массива Papyrus считает ошибкой.
+            If i + 1 < rows.Length
+                i = rows.FindStruct("ItemIndex", aItemIndex, i + 1)
+            Else
+                i = -1
+            EndIf
+        EndWhile
+        chunk += 1
+    EndWhile
+    Return out
+EndFunction
+
+; =====================================================================
+;  Чанки: доступ к кешу
+; =====================================================================
+
+%%CHUNK_ACCESS%%
+
+; =====================================================================
+;  Сгенерированные данные
+; =====================================================================
+
+%%PLUGIN_FILES%%
+
+%%RAW_DISPATCH%%
+
+%%RAW_DATA%%

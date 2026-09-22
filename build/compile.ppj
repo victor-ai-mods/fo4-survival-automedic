@@ -1,0 +1,31 @@
+<?xml version='1.0'?>
+<!--
+  Release/Final ОБЯЗАТЕЛЬНО false.
+
+  Весь ванильный `Debug.psc` объявлен как `Scriptname Debug Native DebugOnly Hidden`,
+  а release-сборка вырезает вызовы DebugOnly-функций целиком и молча. С
+  Release="true" из .pex пропадают и `Debug.OpenUserLog`, и `Debug.TraceUser`,
+  и `Debug.Notification` — мод работает, но не говорит ни слова, и выглядит это
+  как «лог не создаётся». Проверять так:
+      strings build/scripts/AutoMedicQuestScript.pex | grep -i traceuser
+-->
+<PapyrusProject xmlns="PapyrusProject.xsd"
+    Flags="Institute_Papyrus_Flags.flg"
+    Output=".\scripts"
+    Asm="Discard"
+    Optimize="true"
+    Release="false"
+    Final="false">
+    <Imports>
+        <Import>.\f4se_stubs</Import>
+        <Import>..\papyrus</Import>
+        <Import>D:\Games\Fallout 4\Data\Scripts\Source\User</Import>
+        <Import>D:\Games\Fallout 4\Data\Scripts\Source\Base</Import>
+    </Imports>
+    <Scripts>
+        <Script>AutoMedicTables</Script>
+        <Script>AutoMedicSettings</Script>
+        <Script>AutoMedicQuestScript</Script>
+        <Script>AutoMedicScript</Script>
+    </Scripts>
+</PapyrusProject>
