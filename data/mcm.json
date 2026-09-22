@@ -246,7 +246,7 @@
         {"type": "section", "id": "SEC_LOG", "text": {"en": "Log", "ru": "Лог"}},
         {"type": "text", "id": "TXT_LOG",
          "text": {"en": "Own file: Data\\SurvivalAutoMedic\\AutoMedic.log (previous session - AutoMedic.1.log), works with Papyrus logging off and can be read while playing. Papyrus log: Documents\\My Games\\Fallout4\\Logs\\Script\\User\\AutoMedic.0.log, needs bEnableLogging=1 and bEnableTrace=1 in [Papyrus] of Fallout4Custom.ini.", "ru": "Свой файл: Data\\SurvivalAutoMedic\\AutoMedic.log (прошлая сессия - AutoMedic.1.log), работает при выключенных логах Papyrus и читается прямо во время игры. Лог Papyrus: Documents\\My Games\\Fallout4\\Logs\\Script\\User\\AutoMedic.0.log, нужны bEnableLogging=1 и bEnableTrace=1 в [Papyrus] файла Fallout4Custom.ini."}},
-        {"type": "dropdown", "id": "LogTarget", "default": 1,
+        {"type": "dropdown", "id": "LogTarget", "default": 0,
          "text": {"en": "Write the log to", "ru": "Куда писать лог"},
          "help": {"en": "Own file needs no Papyrus logging (Papyrus logging can make the game stutter). Nowhere - no log at all.", "ru": "Свой файл не требует логов Papyrus (с ними игра может подтормаживать). Никуда - лога нет совсем."},
          "options": [{"en": "Nowhere", "ru": "Никуда"}, {"en": "Own file", "ru": "Свой файл"}, {"en": "Papyrus log", "ru": "Лог Papyrus"}, {"en": "Both", "ru": "Оба"}]},
