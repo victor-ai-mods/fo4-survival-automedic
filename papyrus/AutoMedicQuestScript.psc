@@ -1107,6 +1107,7 @@ Function Refresh(Bool abForce)
     ; Профилактика: повторная регистрация после загрузки безвредна.
     RegisterForRemoteEvent(PlayerRef(), "OnSit")
     RegisterForRemoteEvent(PlayerRef(), "OnItemEquipped")
+    RegisterForMenuOpenCloseEvent("SleepWaitMenu")
     RX_LastTime = 0.0
     RX_HotSec = 0.0
     StartTimer(RADX_POLL, TIMER_RADX)
@@ -1450,15 +1451,36 @@ EndFunction
 
 ; Снадобья должны действовать В МОМЕНТ броска болезни (docs/verified.md, M13):
 ; бросок — при каждом засыпании и через ~2 игровые минуты после рискового
-; события. OnSit на кровати приходит раньше засыпания; OnPlayerSleepStart
-; гоняется с обработчиком HC_Manager (A20) — поэтому не он.
-Event Actor.OnSit(Actor akSender, ObjectReference akFurniture)
-    If akFurniture == None || KW_SleepFurniture == None || !akFurniture.HasKeyword(KW_SleepFurniture)
+; события. OnPlayerSleepStart гоняется с обработчиком HC_Manager (A20) —
+; поэтому не он. OnSit на кровати в игре НЕ пришёл ни разу (лог 2026-09-24:
+; сон прошёл, строки «перед сном» нет). Надёжный момент — открытие меню сна:
+; игрок уже лежит, до засыпания ещё выбор часов. Меню то же и для ожидания на
+; стуле — кровать отличает CurrentFurnitureHasKeyword (GOEPE).
+Event OnMenuOpenCloseEvent(String asMenuName, Bool abOpening)
+    If !abOpening || asMenuName != "SleepWaitMenu"
         Return
     EndIf
-    If AM_Settings.HerbalsBeforeSleep
+    ; Меню сна открывается ДО того, как игрок ложится: занятая мебель в этот
+    ; момент не кровать (прогон 2026-09-24 12:42: «кровать False» перед сном).
+    ; Кровать — это то, что только что активировали (объект в прицеле).
+    Actor player = PlayerRef()
+    ObjectReference target = GardenOfEden2.GetLastActivateTargetRef()
+    Bool inBed = KW_SleepFurniture != None && GardenOfEden3.CurrentFurnitureHasKeyword(player, KW_SleepFurniture)
+    Bool atBed = KW_SleepFurniture != None && target != None && target.HasKeyword(KW_SleepFurniture)
+    Bool bed = inBed || atBed
+    LogAt(LOG_TRACE, "[" + GardenOfEden2.GetCurrentDateAndTimeAsString() + "] меню сна/ожидания: кровать " + bed + \
+        " (занятая мебель " + inBed + ", активирован " + target + " " + atBed + ", сидит " + player.GetSitState() + ")")
+    If bed && AM_Settings.HerbalsBeforeSleep
         TopUpHerbals("перед сном")
+    Else
+        FlushLog()
     EndIf
+EndEvent
+
+; Только для лога: приходит ли OnSit вообще (на кровать — не пришёл).
+Event Actor.OnSit(Actor akSender, ObjectReference akFurniture)
+    Bool bed = akFurniture != None && KW_SleepFurniture != None && akFurniture.HasKeyword(KW_SleepFurniture)
+    LogAt(LOG_TRACE, "[" + GardenOfEden2.GetCurrentDateAndTimeAsString() + "] OnSit " + akFurniture + ", кровать " + bed)
 EndEvent
 
 ; HC_Manager узнаёт о съеденном тем же событием. Ловится и приём самим модом.
@@ -1614,7 +1636,7 @@ Event OnTimer(Int aiTimerID)
 EndEvent
 
 ; Почему опрос авторежима не запустил цикл — в лог одной строкой, только при
-; смене причины («» — цикл запущен). Иначе молчаливый выход не отличить от
+; смене причины (запуск цикла причину не сбрасывает). Иначе молчаливый выход не отличить от
 ; остановившегося таймера (авторежим встал 2026-09-23 01:54 без следа в логе).
 Function AutoSkip(String asWhy)
     If asWhy == AU_SkipWhy
@@ -1773,7 +1795,8 @@ Function AutoPoll(AutoMedicSettings m)
             Return
         EndIf
     EndIf
-    AutoSkip("")
+    ; Причина после цикла НЕ сбрасывается: иначе проверка болезней раз в 30 с
+    ; каждый раз заново писала бы «пороги не достигнуты» (и переписывала файл).
 
     Var[] args = new Var[3]
     Int mode = MODE_AUTO
