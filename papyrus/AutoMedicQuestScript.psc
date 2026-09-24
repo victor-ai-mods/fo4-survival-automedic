@@ -200,6 +200,9 @@ Float Property AUTO_OFF_POLL = 5.0 AutoReadOnly Hidden
 ; Пауза после любого цикла: исполнение ждёт смены стадий, и «в полёте»
 ; должно успеть появиться в GetActiveEffects.
 Float Property AUTO_MIN_GAP = 3.0 AutoReadOnly Hidden
+; Сколько вне боя ждать конца сцены (диалога) с игроком — дальше она
+; считается застрявшей и авторежиму не мешает.
+Float Property AUTO_SCENE_WAIT = 30.0 AutoReadOnly Hidden
 ; Болезни и зависимости дёшево не прочитать (нужен GetActiveEffects) —
 ; полный цикл раз в столько секунд (и в бою); нужд нет — он молчит.
 Float Property AUTO_STATUS_SEC = 30.0 AutoReadOnly Hidden
@@ -231,6 +234,10 @@ FormList[] NL_Lists
 Float AU_LastEnd = 0.0
 Float AU_LastStatus = 0.0
 Float AU_RetryAt = 0.0
+; Последняя записанная в лог причина, по которой опрос не запустил цикл (AutoSkip).
+String AU_SkipWhy = ""
+; Начало непрерывной сцены с игроком (реальное время), 0 — не в сцене.
+Float AU_SceneSince = 0.0
 ; Состояние, при котором авто-цикл ничего не принял (для «стало хуже»).
 Float AU_IdleHPPct = 0.0
 Float AU_IdleRads = 0.0
@@ -1093,6 +1100,8 @@ Function Refresh(Bool abForce)
     AU_LastStatus = 0.0
     AU_RetryAt = 0.0
     AU_IdleValid = false
+    AU_SkipWhy = ""
+    AU_SceneSince = 0.0
     AU_ListsOK = true
     StartTimer(AUTO_OFF_POLL, TIMER_AUTO)
     ; Профилактика: повторная регистрация после загрузки безвредна.
@@ -1539,7 +1548,7 @@ Function RadXPoll()
     Bool fresh = RX_LastTime <= 0.0 || dt <= 0.0 || dt > RADX_OFF_POLL
     RX_LastTime = now
     RX_LastRads = rads
-    If fresh || AM_Busy || Utility.IsInMenuMode()
+    If fresh || BusyAlive() || Utility.IsInMenuMode()
         RX_HotSec = 0.0
         Return
     EndIf
@@ -1597,18 +1606,44 @@ Event OnTimer(Int aiTimerID)
     AutoMedicSettings m = AM_Settings
     If !m.AutoMode
         StartTimer(AUTO_OFF_POLL, TIMER_AUTO)
+        AutoSkip("авторежим выкл.")
         Return
     EndIf
     StartTimer(ClampInt(m.AutoPollSec, 1, 30) as Float, TIMER_AUTO)
     AutoPoll(m)
 EndEvent
 
+; Почему опрос авторежима не запустил цикл — в лог одной строкой, только при
+; смене причины («» — цикл запущен). Иначе молчаливый выход не отличить от
+; остановившегося таймера (авторежим встал 2026-09-23 01:54 без следа в логе).
+Function AutoSkip(String asWhy)
+    If asWhy == AU_SkipWhy
+        Return
+    EndIf
+    AU_SkipWhy = asWhy
+    If asWhy != ""
+        ; Сразу в файл: причина меняется редко, а отложенная строка при
+        ; «застрявшей» причине не ушла бы в файл никогда.
+        LogAt(LOG_TRACE, "[" + GardenOfEden2.GetCurrentDateAndTimeAsString() + "] авто-опрос: пропуск — " + asWhy)
+        FlushLog()
+    EndIf
+EndFunction
+
 ; Дешёвая проверка: несколько GetValue и ни одного обращения к инвентарю.
 ; Сработал порог — полный цикл (он и решает, что именно принять, с учётом
 ; «в полёте»). Пороги здесь — те же, что применит ApplyAutoMode.
 Function AutoPoll(AutoMedicSettings m)
     ; «Только план» — автоматике показывать некому, а цикл повторялся бы вечно.
-    If AM_Busy || m.DryRun || Utility.IsInMenuMode()
+    ; BusyAlive, а не AM_Busy: брошенный цикл (флаг остался в сейве) иначе
+    ; навсегда глушил авторежим — снимал его только ручной приём (TryBusy).
+    If BusyAlive()
+        AutoSkip("идёт цикл")
+        Return
+    ElseIf m.DryRun
+        AutoSkip("план без приёма")
+        Return
+    ElseIf Utility.IsInMenuMode()
+        ; Без AutoSkip: каждое открытие Pip-Boy — две строки и две перезаписи лога.
         Return
     EndIf
     Float now = Utility.GetCurrentRealTime()
@@ -1621,12 +1656,32 @@ Function AutoPoll(AutoMedicSettings m)
         Return
     EndIf
     Actor player = PlayerRef()
-    If player.IsDead() || player.IsBleedingOut() || player.IsInScene()
+    If player.IsDead()
+        AutoSkip("мёртв")
+        Return
+    ElseIf player.IsBleedingOut()
+        AutoSkip("истекает кровью")
         Return
     EndIf
     Bool combat = player.IsInCombat()
     If combat && !m.AutoInCombat
+        AutoSkip("бой (авто в бою выкл.)")
         Return
+    EndIf
+    ; Сцена — ради диалога: не есть посреди разговора. Но сцена с игроком
+    ; может «застрять» и уехать в сейв — тогда IsInScene навсегда глушил
+    ; авторежим (2026-09-23 01:54 .. 09-24, Nuka-World). Поэтому в бою сцена
+    ; не мешает, а вне боя ждём её конца не дольше AUTO_SCENE_WAIT.
+    If player.IsInScene()
+        If AU_SceneSince <= 0.0 || now < AU_SceneSince
+            AU_SceneSince = now
+        EndIf
+        If !combat && now - AU_SceneSince < AUTO_SCENE_WAIT
+            AutoSkip("в сцене")
+            Return
+        EndIf
+    Else
+        AU_SceneSince = 0.0
     EndIf
 
     Float pct = player.GetValuePercentage(AV_Health) * 100.0
@@ -1697,6 +1752,7 @@ Function AutoPoll(AutoMedicSettings m)
         gotNew = true
     EndIf
     If why == ""
+        AutoSkip("пороги не достигнуты")
         Return
     EndIf
     ; Прошлый авто-цикл ничего не принял — ждём AutoRetrySec, если не стало хуже.
@@ -1713,9 +1769,11 @@ Function AutoPoll(AutoMedicSettings m)
         ElseIf NewItems()
             why += " (новое: " + AU_NewWhat + ")"
         Else
+            AutoSkip("пауза повтора после пустого цикла")
             Return
         EndIf
     EndIf
+    AutoSkip("")
 
     Var[] args = new Var[3]
     Int mode = MODE_AUTO
@@ -1724,6 +1782,9 @@ Function AutoPoll(AutoMedicSettings m)
         args[0] = "auto, бой: " + why
     Else
         args[0] = "auto: " + why
+    EndIf
+    If AU_SceneSince > 0.0
+        args[0] = args[0] as String + " (в сцене " + R0(now - AU_SceneSince) + " с)"
     EndIf
     args[1] = false
     args[2] = mode
@@ -2041,9 +2102,15 @@ EndFunction
 ; Занять мод. Цикл, который висит дольше BUSY_TIMEOUT, считается брошенным
 ; (стек потерян при обновлении скрипта), и его место можно занять. Реальное
 ; время в новой сессии игры начинается с нуля — это тоже «брошенный».
+; Идёт ли цикл на самом деле: AM_Busy, не ставший брошенным.
+Bool Function BusyAlive()
+    Float now = Utility.GetCurrentRealTime()
+    Return AM_Busy && now >= AM_BusyStart && now - AM_BusyStart < BUSY_TIMEOUT
+EndFunction
+
 Bool Function TryBusy(Bool abLoud = true)
     Float now = Utility.GetCurrentRealTime()
-    If AM_Busy && now >= AM_BusyStart && now - AM_BusyStart < BUSY_TIMEOUT
+    If BusyAlive()
         If abLoud
             Debug.Notification("AutoMedic: предыдущий цикл ещё не закончен")
         EndIf
