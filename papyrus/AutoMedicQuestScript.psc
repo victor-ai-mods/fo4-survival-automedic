@@ -57,15 +57,26 @@ Float HEAL_TARGET_PCT = 100.0
 Float RAD_TRIGGER_PCT = 15.0
 Float RAD_TARGET_PCT = 0.0
 ; «Низкие ОД» (MCM ApItemsBelowPct, % от текущего максимума): только ниже
-; этого порога можно тратить ОД-напитки — предметы, восполняющие больше
-; AP_BIG_PCT % максимума ОД без дебафов (решение пользователя 2026-09-22:
+; этого порога можно тратить крупные ОД-напитки — предметы, восполняющие больше
+; AP_LOCK_PCT % максимума ОД без дебафов (решение пользователя 2026-09-22:
 ; Ядер-Вишню пили ради лечения). 100 — всегда можно, 0 — никогда.
+; Ниже порога ОД — ещё и нужда: восполнить ОД до 100 % (решение пользователя
+; 2026-09-27; стадия плана «ap», PlanAP).
 Float AP_TRIGGER_PCT = 30.0
 ; MCM ApItemsMode: 0 — никогда, 1 — только в бою (дефолт), 2 — всегда. Работает
 ; ВМЕСТЕ с порогом: «в бою» = в бою И ОД ниже порога.
 Int AP_ITEMS_MODE = 1
-Float Property AP_BIG_PCT = 10.0 AutoReadOnly Hidden
-; Сколько штук Ядер-Колы (ObjectTypeNukaCola, все виды вместе) не тратить никогда.
+; Два порога (решение пользователя 2026-09-27). Вне разрешения ОД-напитков
+; запираются только крупные (> AP_LOCK_PCT): обычная Ядер-Кола и Vim (+10 ОД при
+; максимуме от 100) остаются простым лечением. Под нужду ОД идёт всё, что
+; даёт больше AP_BIG_PCT, — и они тоже.
+Float Property AP_LOCK_PCT = 10.0 AutoReadOnly Hidden
+Float Property AP_BIG_PCT = 5.0 AutoReadOnly Hidden
+; Недобор ОД в пределах допуска (% шкалы) нуждой не считается: иначе ради
+; последних 2-3 ОД выпивалась бы целая бутылка.
+Float Property AP_TOLERANCE_PCT = 5.0 AutoReadOnly Hidden
+; Сколько бутылок колы (ObjectTypeNukaCola, все виды вместе) не тратить
+; никогда. В запас идут самые сильные по ОД (решение пользователя 2026-09-27).
 Int COLA_RESERVE = 0
 ; §2.1 №4: максимум радиации (AV RadHealthMax) — 1000.
 Float Property RADS_MAX = 1000.0 AutoReadOnly Hidden
@@ -273,6 +284,7 @@ Int Property NEED_LIMBS = 2 AutoReadOnly Hidden
 Int Property NEED_HP = 3 AutoReadOnly Hidden
 Int Property NEED_DISEASE = 4 AutoReadOnly Hidden
 Int Property NEED_ADDICTION = 5 AutoReadOnly Hidden
+Int Property NEED_AP = 6 AutoReadOnly Hidden
 
 Bool AM_ToolGiven = false
 Bool AM_LogOpen = false
@@ -359,8 +371,12 @@ Float S_MaxHP
 Float S_Rads
 Float S_AP
 Float S_APPct
-; GetBaseValue: максимум ОД без дебафов (и без бафов) — для порога AP_BIG_PCT.
+; GetBaseValue: максимум ОД без дебафов (и без бафов) — для порогов AP_LOCK_PCT/AP_BIG_PCT.
 Float S_APBase
+; «100 %» шкалы ОД: S_AP / S_APPct. При нуле ОД доли нет — тогда последнее
+; известное значение (L_APFull), но не меньше базы.
+Float S_APFull
+Float L_APFull = 0.0
 Float S_Hunger
 Float S_Thirst
 Float S_Sleep
@@ -411,7 +427,10 @@ Float N_RadTarget
 Int N_Limbs
 Int N_Disease
 Int N_Addiction
-Bool N_AP
+; ОД-напитки сейчас разрешены (режим MCM, бой, ОД ниже порога) и сколько ОД
+; не хватает до 100 % с учётом «в полёте» (0 — нужды нет).
+Bool N_APAllowed
+Float N_APNeed
 Int N_Uses
 
 ; --- кандидаты (сведены по форме) ---
@@ -428,11 +447,12 @@ Int C_RadsCount
 Int C_HungerCount
 ; Штук еды в запасе (сумма K_Counts по K_InPool).
 Int C_FoodPool
-; Штук Ядер-Колы (сумма K_Counts по K_InCola) и сколько видов ОД-напитков
-; заперто порогом ОД (K_APLocked).
-Int C_ColaPool
+; Штук колы, отложенных в запас (сумма K_ColaKeep), и сколько видов
+; ОД-напитков заперто порогом ОД (K_APLocked).
+Int C_ColaKept
 Int C_APLocked
 Float C_APBig
+Float C_APLock
 String C_APWhy
 Int C_ThirstCount
 Int C_DiseaseCount
@@ -468,6 +488,10 @@ Bool[] K_AfterFood
 Bool[] K_InPool
 Bool[] K_InCola
 Bool[] K_APLocked
+; Сколько ОД даёт штука (0 — если заперта или не подействует, M4).
+Float[] K_AP
+; Штук кандидата в запасе колы (ColaReserve): мод их не тратит никогда.
+Int[] K_ColaKeep
 ; K_AfterFood, а голод закрыть нечем: лечения/вывода/излечения не даст.
 Bool[] K_Dead
 String[] K_Names
@@ -483,6 +507,7 @@ String P_Notes
 Float T_Heal
 Float T_RadOut
 Float T_RadIn
+Float T_AP
 Bool T_Immuno
 Bool P_LimitHit
 ; Подходящую еду не взяли, чтобы не тронуть запас (для UNMET).
@@ -514,9 +539,6 @@ Bool H_HasCap
 Float H_RadCap
 Bool H_HasPool
 Int H_PoolRoom
-Bool[] H_Cola
-Bool H_HasCola
-Int H_ColaRoom
 Int H_Nodes
 ; Лучший набор: класс (-1 — нет, 0 — добран, 1 — недобор), потери, штук, cost.
 Int H_BestCls
@@ -545,6 +567,7 @@ Float A_Thirst
 Float A_InHeal
 Float A_InRadOut
 Int A_Crippled
+Float A_AP
 ; «В полёте» по ScanInFlight (исполнение).
 Float F_Heal
 Float F_RadOut
@@ -877,6 +900,8 @@ String Function NeedName(Int aiNeed)
         Return "disease"
     ElseIf aiNeed == NEED_ADDICTION
         Return "addict"
+    ElseIf aiNeed == NEED_AP
+        Return "ap"
     EndIf
     Return "?"
 EndFunction
@@ -1372,7 +1397,7 @@ Function LoadSettings()
         "| цена <= " + R0(MAX_ITEM_VALUE) + ", химия " + OnOff(USE_CHEMS, "") + \
         "алкоголь " + OnOff(USE_ALCOHOL, "") + "ОД-напитки " + ApModeName(AP_ITEMS_MODE) + \
         " при ОД < " + R0(AP_TRIGGER_PCT) + \
-        "%, запас колы " + COLA_RESERVE + ", исключения " + OnOff(USE_EXCLUSIONS, "") + \
+        "% (восполнять до 100%), запас колы " + COLA_RESERVE + " (лучшие по ОД), исключения " + OnOff(USE_EXCLUSIONS, "") + \
         "(" + AM_Excluded.Length + ") | сводка " + NOTIFY_LEVEL + \
         ", лог " + LOG_LEVEL + " -> " + LogTargetName() + ", план без приёма " + OnOff(DRY_RUN, "") +         " | авто " + OnOff(m.AutoMode, "") + "hp " + m.AutoHealTriggerPct + "->" + m.AutoHealTargetPct +         "%, rads " + m.AutoRadTriggerPct + "->" + m.AutoRadTargetPct + "%, бой " + OnOff(m.AutoInCombat, "") +         "прочее " + OnOff(m.AutoOther, "") + "опрос " + m.AutoPollSec + " с, повтор " + m.AutoRetrySec + " с"
     If text != AM_SettingsText
@@ -1737,6 +1762,12 @@ Function AutoPoll(AutoMedicSettings m)
         why = Join(why, "rads " + R0(rads))
         bits = WithBit(bits, USE_RADS)
     EndIf
+    ; ОД — по настройке «Тратить напитки с ОД», а не по «Также…»: это её нужда.
+    Float apPct = player.GetValuePercentage(AV_AP) * 100.0
+    If ApDrinksAllowedFor(m.ApItemsMode, m.ApItemsBelowPct as Float, combat, apPct) && apPct < 100.0
+        why = Join(why, "ap " + R0(apPct) + "%")
+        bits = WithBit(bits, USE_AP)
+    EndIf
     If m.AutoOther
         hunger = player.GetValue(AV_Hunger)
         thirst = player.GetValue(AV_Thirst)
@@ -1918,6 +1949,9 @@ Int Function PrimaryBits()
     If N_Limbs > 0
         bits = WithBit(bits, USE_LIMBS)
     EndIf
+    If N_APNeed > 0.0
+        bits = WithBit(bits, USE_AP)
+    EndIf
     Return bits
 EndFunction
 
@@ -1947,6 +1981,8 @@ String Function BitName(Int aiBit)
         Return "disease"
     ElseIf aiBit == 5
         Return "addiction"
+    ElseIf aiBit == 6
+        Return "ap"
     ElseIf aiBit == 7
         Return "limbs"
     EndIf
@@ -2295,6 +2331,12 @@ Function ReadValues(Actor akPlayer)
     S_AP = akPlayer.GetValue(AV_AP)
     S_APPct = akPlayer.GetValuePercentage(AV_AP)
     S_APBase = akPlayer.GetBaseValue(AV_AP)
+    If S_APPct > 0.0
+        S_APFull = S_AP / S_APPct
+        L_APFull = S_APFull
+    Else
+        S_APFull = Math.Max(S_APBase, L_APFull)
+    EndIf
     S_Hunger = akPlayer.GetValue(AV_Hunger)
     S_Thirst = akPlayer.GetValue(AV_Thirst)
     S_Sleep = akPlayer.GetValue(AV_Sleep)
@@ -2656,7 +2698,16 @@ Function BuildNeeds()
     If ENABLE_ADDICTION
         N_Addiction = S_AddictionCount
     EndIf
-    N_AP = S_APPct * 100.0 < AP_TRIGGER_PCT
+    ; ОД: нужда есть, только пока ОД-напитки разрешены (режим, бой, порог).
+    ; Цель — 100 % шкалы; ОД «в полёте» (кола пьётся 5 с) уже в зачёт.
+    N_APAllowed = ApDrinksAllowed()
+    N_APNeed = 0.0
+    If N_APAllowed
+        Float apNeed = S_APFull - S_AP - S_InAP
+        If apNeed > APTolerance()
+            N_APNeed = apNeed
+        EndIf
+    EndIf
 
     ; Какие предметы вообще стоит искать в инвентаре. Лечащая еда может
     ; принести радиацию (M2) — поэтому при нужде в ОЗ ищутся и средства
@@ -2684,7 +2735,7 @@ Function BuildNeeds()
     If N_Addiction > 0
         N_Uses = WithBit(N_Uses, USE_ADDICTION)
     EndIf
-    If N_AP
+    If N_APNeed > 0.0
         N_Uses = WithBit(N_Uses, USE_AP)
     EndIf
     ; Шаг 6: RadAway вызывает голод (M8), стимпак — жажду. Циклы исполнения
@@ -2740,6 +2791,31 @@ EndFunction
 
 Float Function HPTolerance()
     Return N_EffMaxNow * HP_TOLERANCE_PCT / 100.0
+EndFunction
+
+Float Function APTolerance()
+    Return S_APFull * AP_TOLERANCE_PCT / 100.0
+EndFunction
+
+; Можно ли сейчас тратить ОД-напитки (для цикла; причина запрета -> C_APWhy).
+Bool Function ApDrinksAllowed()
+    Float pct = S_APPct * 100.0
+    C_APWhy = "ОД " + R0(pct) + "% не ниже " + R0(AP_TRIGGER_PCT) + "%"
+    If AP_ITEMS_MODE == 0
+        C_APWhy = "режим «никогда»"
+    ElseIf AP_ITEMS_MODE == 1 && !S_InCombat
+        C_APWhy = "не в бою (режим «только в бою»)"
+    EndIf
+    Return ApDrinksAllowedFor(AP_ITEMS_MODE, AP_TRIGGER_PCT, S_InCombat, pct)
+EndFunction
+
+; То же по готовым значениям — общее для цикла и опроса авторежима.
+; aiMode: 0 никогда, 1 только в бою, 2 всегда; порог 100 — при любых ОД.
+Bool Function ApDrinksAllowedFor(Int aiMode, Float afBelowPct, Bool abCombat, Float afAPPct)
+    If aiMode == 0 || (aiMode == 1 && !abCombat)
+        Return false
+    EndIf
+    Return afBelowPct >= 100.0 || afAPPct < afBelowPct
 EndFunction
 
 ; =====================================================================
@@ -3119,8 +3195,10 @@ Function EvalCandidates()
     K_InPool = new Bool[n]
     K_InCola = new Bool[n]
     K_APLocked = new Bool[n]
+    K_AP = new Float[n]
+    K_ColaKeep = new Int[n]
     C_FoodPool = 0
-    C_ColaPool = 0
+    C_ColaKept = 0
     C_APLocked = 0
     K_Dead = new Bool[n]
     K_Names = new String[n]
@@ -3135,25 +3213,14 @@ Function EvalCandidates()
     C_HungerCheapest = -1
     C_ThirstCheapest = -1
 
-    ; ОД-напитки при ОД выше порога заперты для ВСЕХ нужд (и для циклов голода/жажды).
-    ; Максимум ОД без дебафов — большее из базы и текущего максимума (бафы Ловкости).
-    Float apMax = S_APBase
-    If S_APPct > 0.0 && S_AP / S_APPct > apMax
-        apMax = S_AP / S_APPct
-    EndIf
-    C_APBig = apMax * AP_BIG_PCT / 100.0
-    Bool apLow = AP_TRIGGER_PCT >= 100.0 || S_APPct * 100.0 < AP_TRIGGER_PCT
-    C_APWhy = "ОД " + R0(S_APPct * 100.0) + "% не ниже " + R0(AP_TRIGGER_PCT) + "%"
-    If AP_ITEMS_MODE == 0
-        apLow = false
-        C_APWhy = "режим «никогда»"
-    ElseIf AP_ITEMS_MODE == 1 && !S_InCombat
-        apLow = false
-        C_APWhy = "не в бою (режим «только в бою»)"
-    EndIf
+    ; ОД-напитки, пока они не разрешены (N_APAllowed, BuildNeeds), заперты для
+    ; ВСЕХ нужд (и для циклов голода/жажды). Максимум ОД без дебафов — большее
+    ; из базы и текущего максимума (бафы Ловкости).
+    C_APBig = Math.Max(S_APBase, S_APFull) * AP_BIG_PCT / 100.0
+    C_APLock = Math.Max(S_APBase, S_APFull) * AP_LOCK_PCT / 100.0
     Int k = 0
     While k < n
-        K_APLocked[k] = !apLow && ItemDataL(K_Rows[k]).ApRestore > C_APBig
+        K_APLocked[k] = !N_APAllowed && ItemDataL(K_Rows[k]).ApRestore > C_APLock
         If K_APLocked[k]
             C_APLocked += 1
         EndIf
@@ -3217,8 +3284,8 @@ Function EvalCandidates()
             C_FoodPool += K_Counts[k]
         EndIf
         K_InCola[k] = Has(flags, TF_CAT_COLA)
-        If K_InCola[k]
-            C_ColaPool += K_Counts[k]
+        If !K_Dead[k]
+            K_AP[k] = d.ApRestore
         EndIf
         ; Запертый ОД-напиток: ни на что (LoopPick/CheapestUsable/PlanLimbs смотрят K_Uses).
         If K_APLocked[k]
@@ -3227,6 +3294,7 @@ Function EvalCandidates()
             radOut = 0.0
             K_Heal[k] = 0.0
             K_RadOut[k] = 0.0
+            K_AP[k] = 0.0
         EndIf
 
         ; Резервы §7 «Экономия»: стимпаки и RadAway (RadAway — единственный
@@ -3257,11 +3325,65 @@ Function EvalCandidates()
         If Has(K_Uses[k], USE_ADDICTION) && !K_Dead[k]
             C_AddictionCount += 1
         EndIf
-        If Has(K_Uses[k], USE_AP)
+        k += 1
+    EndWhile
+
+    ReserveCola()
+    ; Под нужду ОД идут только ОД-напитки (> C_APBig) — не еда с парой ОД.
+    k = 0
+    While k < n
+        If K_AP[k] > C_APBig && K_Avail[k] > 0
             C_APCount += 1
         EndIf
         k += 1
     EndWhile
+EndFunction
+
+; Запас колы (MCM ColaReserve): COLA_RESERVE самых сильных по ОД бутылок
+; (при равных ОД — лучше лечащих, потом дороже) не тратится ни на что —
+; ни на ОД, ни на лечение (решение пользователя 2026-09-27). Считаются
+; бутылки, которые мод вообще может взять (кандидаты), в том числе
+; запертые сейчас порогом ОД: запас от этого не зависит.
+Function ReserveCola()
+    Int n = K_Forms.Length
+    Int left = COLA_RESERVE
+    While left > 0
+        Int best = -1
+        Int k = 0
+        While k < n
+            If K_InCola[k] && K_ColaKeep[k] < K_Counts[k] && (best < 0 || ColaBetter(k, best))
+                best = k
+            EndIf
+            k += 1
+        EndWhile
+        If best < 0
+            left = 0
+        Else
+            Int take = K_Counts[best] - K_ColaKeep[best]
+            If take > left
+                take = left
+            EndIf
+            K_ColaKeep[best] = K_ColaKeep[best] + take
+            C_ColaKept += take
+            left -= take
+            K_Avail[best] = K_Avail[best] - take
+            If K_Avail[best] < 0
+                K_Avail[best] = 0
+            EndIf
+        EndIf
+    EndWhile
+EndFunction
+
+; Бутылка a ценнее для запаса, чем b.
+Bool Function ColaBetter(Int a, Int b)
+    AutoMedicTables:ItemData da = ItemDataL(K_Rows[a])
+    AutoMedicTables:ItemData db = ItemDataL(K_Rows[b])
+    If da.ApRestore != db.ApRestore
+        Return da.ApRestore > db.ApRestore
+    ElseIf da.HealHP != db.HealHP
+        Return da.HealHP > db.HealHP
+    EndIf
+    Return K_Values[a] > K_Values[b]
 EndFunction
 
 ; =====================================================================
@@ -3270,7 +3392,8 @@ EndFunction
 
 ; Стадии идут в порядке §4.2: A — радиация (она поднимает потолок ОЗ, M1),
 ; B — конечности (один стимпак лечит все, его ОЗ вычитаются из нужды),
-; D — болезни и зависимости (омлет лечит заодно и ОЗ), C — здоровье,
+; D — болезни и зависимости (омлет лечит заодно и ОЗ), AP — ОД до 100 %
+; (кола лечит и ОЗ — на стадии C это уже в зачёте), C — здоровье,
 ; и A' — добор вывода под радиацию, которую принесёт лечащая еда (M2):
 ; тогда один антирад подметает и старую, и новую.
 ;
@@ -3288,13 +3411,14 @@ Function Plan()
     P_ReserveHit = false
     P_RadsUnprofitable = false
     If C_APLocked > 0
-        P_Notes = Join(P_Notes, "ОД-напитки (> " + R0(C_APBig) + " ОД) не трогаю: " + C_APWhy + \
+        P_Notes = Join(P_Notes, "ОД-напитки (> " + R0(C_APLock) + " ОД) не трогаю: " + C_APWhy + \
             " (" + C_APLocked + " видов)")
     EndIf
 
     PlanRads("A")
     PlanLimbs()
     PlanCures()
+    PlanAP()
     PlanHealth("C")
     Totals(-1)
     If RadShortfall(-1) > RAD_TOLERANCE && C_RadsCount > 0 && !P_RadsUnprofitable
@@ -3310,6 +3434,7 @@ Function Totals(Int aiExcept)
     T_Heal = 0.0
     T_RadOut = 0.0
     T_RadIn = 0.0
+    T_AP = 0.0
     T_Immuno = false
     Int e = 0
     While e < P_K.Length
@@ -3318,6 +3443,7 @@ Function Totals(Int aiExcept)
             T_Heal += K_Heal[k]
             T_RadOut += K_RadOut[k]
             T_RadIn += K_RadIn[k]
+            T_AP += K_AP[k]
             If Has(K_Flags[k], TF_IMMUNO_DEF)
                 T_Immuno = true
             EndIf
@@ -3338,6 +3464,16 @@ EndFunction
 Float Function HPShortfall(Int aiExcept)
     Totals(aiExcept)
     Float s = NeedHPGiven(T_RadOut, T_RadIn) - T_Heal
+    If s < 0.0
+        Return 0.0
+    EndIf
+    Return s
+EndFunction
+
+; Сколько ОД ещё не хватает до 100 % при таком плане (ОД дают все его строки).
+Float Function APShortfall(Int aiExcept)
+    Totals(aiExcept)
+    Float s = N_APNeed - T_AP
     If s < 0.0
         Return 0.0
     EndIf
@@ -3365,10 +3501,8 @@ EndFunction
 ; Запас еды (MCM «Голод и жажда»): ещё одна штука k на ОЗ, радиацию или
 ; излечение опустила бы запас ниже FOOD_RESERVE. Циклы голода запас есть
 ; могут — в план (P_K) они не входят, поэтому здесь считаются только строки плана.
+; Запас колы сюда не входит: он вычтен из K_Avail заранее (ReserveCola).
 Bool Function ReserveBlocks(Int k)
-    If ColaReserveBlocks(k)
-        Return true
-    EndIf
     If FOOD_RESERVE <= 0 || !K_InPool[k]
         Return false
     EndIf
@@ -3387,43 +3521,10 @@ Bool Function ReserveBlocks(Int k)
     Return false
 EndFunction
 
-; Запас Ядер-Колы (MCM ColaReserve): как запас еды, но для всех видов колы
-; вместе и без поблажки циклам голода/жажды — кола не тратится ниже N никем.
-Bool Function ColaReserveBlocks(Int k)
-    If COLA_RESERVE <= 0 || !K_InCola[k]
-        Return false
-    EndIf
-    If C_ColaPool - ColaPlanned() - 1 < COLA_RESERVE
-        P_ReserveHit = true
-        Return true
-    EndIf
-    Return false
-EndFunction
-
-; Сколько штук колы уже в плане.
-Int Function ColaPlanned()
-    Int taken = 0
-    Int e = 0
-    While e < P_K.Length
-        If K_InCola[P_K[e]]
-            taken += 1
-        EndIf
-        e += 1
-    EndWhile
-    Return taken
-EndFunction
-
-; Сколько колы осталось при исполнении (минус уже принятое в этом цикле).
-Int Function ColaPoolLeft()
-    Int left = C_ColaPool
-    Int k = 0
-    While k < E_Used.Length
-        If K_InCola[k]
-            left -= E_Used[k]
-        EndIf
-        k += 1
-    EndWhile
-    Return left
+; Сколько штук кандидата k ещё можно тратить при исполнении: запас колы
+; (K_ColaKeep) не трогает никто, и циклы голода/жажды тоже.
+Int Function FreeLeft(Int k)
+    Return K_Counts[k] - E_Used[k] - K_ColaKeep[k]
 EndFunction
 
 ; То же при исполнении, по живому остатку: цикл голода мог съесть часть запаса.
@@ -3654,6 +3755,46 @@ Int Function CheapestUsable(Int aiUse)
     Return best
 EndFunction
 
+; AP: ОД до 100 % (решение пользователя 2026-09-27). Нужда есть, только пока
+; ОД-напитки разрешены (N_APAllowed). ОД строк, уже взятых в план (Ядер-Виноград
+; на радиацию), идут в зачёт. Берутся только ОД-напитки (> C_APBig), жадно по
+; min(ОД, остаток) / цена — радиация колы тоже в цене (в ОЗ потолка, M1). На
+; хвосте нужды это само выбирает бутылку поменьше: 5 недостающих ОД
+; обычная кола даёт дешевле Дикой. Их лечение стадия C уже увидит в T_Heal.
+Function PlanAP()
+    Float tol = APTolerance()
+    Float rem = APShortfall(-1)
+    While rem > tol
+        Int k = BestForAP(rem)
+        If k < 0 || !AddEntry(k, NEED_AP, Math.Min(K_AP[k], rem))
+            Return
+        EndIf
+        rem = APShortfall(-1)
+    EndWhile
+EndFunction
+
+Int Function BestForAP(Float afRem)
+    Float hpPerRad = S_MaxHP / RADS_MAX
+    Int best = -1
+    Float bestScore = 0.0
+    Int k = 0
+    While k < K_Forms.Length
+        If K_AP[k] > C_APBig && LeftOf(k) > 0 && RadsAllowed(k) && !ReserveBlocks(k)
+            Float score = Math.Min(K_AP[k], afRem) / (CostOf(k) + K_RadIn[k] * hpPerRad)
+            If score > bestScore
+                best = k
+                bestScore = score
+            EndIf
+        EndIf
+        k += 1
+    EndWhile
+    If best >= 0 && LOG_LEVEL >= LOG_TRACE
+        P_Trace = P_Trace + "\n         PICK   ap rem " + R0(afRem) + ": " + CandName(best) + " +" + \
+            R0(K_AP[best]) + " ОД, cost " + R1(CostOf(best)) + " = " + R1(bestScore * 100.0) + " ОД на 100c"
+    EndIf
+    Return best
+EndFunction
+
 ; C: здоровье — набор с МИНИМАЛЬНЫМ ПЕРЕЛЕЧЕНИЕМ (решение пользователя
 ; 2026-09-22: цена в крышках решает только голод; «осталось 80 — лучше 40 + 50,
 ; чем одна на 110»). Наборы сравниваются по (добран ли, потери ОЗ, штук, cost):
@@ -3695,8 +3836,6 @@ Function PlanHealth(String asStage)
         EndWhile
         H_PoolRoom = C_FoodPool - taken - FOOD_RESERVE
     EndIf
-    H_HasCola = COLA_RESERVE > 0
-    H_ColaRoom = C_ColaPool - ColaPlanned() - COLA_RESERVE
 
     ; Кандидаты: закрытие нужды за штуку. Радиация еды опускает потолок —
     ; нужда меньше; вывод поднимает — нужда больше.
@@ -3729,7 +3868,6 @@ Function PlanHealth(String asStage)
     H_Cost = new Float[m]
     H_Left = new Int[m]
     H_Pool = new Bool[m]
-    H_Cola = new Bool[m]
     H_Rad = new Float[m]
     H_Cur = new Int[m]
     H_BestCur = new Int[m]
@@ -3747,7 +3885,6 @@ Function PlanHealth(String asStage)
                 H_Cost[j] = H_Cost[j - 1]
                 H_Left[j] = H_Left[j - 1]
                 H_Pool[j] = H_Pool[j - 1]
-                H_Cola[j] = H_Cola[j - 1]
                 H_Rad[j] = H_Rad[j - 1]
                 j -= 1
             EndWhile
@@ -3757,7 +3894,6 @@ Function PlanHealth(String asStage)
             H_Cost[j] = cst
             H_Left[j] = LeftOf(k)
             H_Pool[j] = H_HasPool && K_InPool[k]
-            H_Cola[j] = H_HasCola && K_InCola[k]
             H_Rad[j] = K_RadIn[k]
             filled += 1
         EndIf
@@ -3769,7 +3905,7 @@ Function PlanHealth(String asStage)
     H_BestCls = -1
     H_Nodes = 0
     Float t0 = Utility.GetCurrentRealTime()
-    HealSearch(0, 0.0, 0.0, 0, 0.0, 0, 0, 0.0)
+    HealSearch(0, 0.0, 0.0, 0, 0.0, 0, 0.0)
     Float ms = (Utility.GetCurrentRealTime() - t0) * 1000.0
     If H_BestCls < 0
         Return
@@ -3808,10 +3944,13 @@ Function PlanHealth(String asStage)
         If H_BestN >= H_Slots
             P_LimitHit = true
         EndIf
-        If H_HasPool || H_HasCola
+        If C_ColaKept > 0
+            P_ReserveHit = true
+        EndIf
+        If H_HasPool
             i = 0
             While i < m
-                If H_Pool[i] || H_Cola[i]
+                If H_Pool[i]
                     P_ReserveHit = true
                 EndIf
                 i += 1
@@ -3887,7 +4026,7 @@ EndFunction
 ; Перебор с отсечениями: тип i берётся 0..top штук, где top — сколько нужно,
 ; чтобы добрать (больше — только лишнее перелечение). Первым проходится
 ; «крупными штуками», так что даже при исчерпании бюджета набор есть.
-Function HealSearch(Int i, Float afTotal, Float afPen, Int aiN, Float afCost, Int aiPool, Int aiCola, Float afRads)
+Function HealSearch(Int i, Float afTotal, Float afPen, Int aiN, Float afCost, Int aiPool, Float afRads)
     H_Nodes += 1
     If i >= H_K.Length || aiN >= H_Slots || H_Nodes > HEAL_NODE_BUDGET
         HealOffer(afTotal, afPen, aiN, afCost)
@@ -3921,9 +4060,6 @@ Function HealSearch(Int i, Float afTotal, Float afPen, Int aiN, Float afCost, In
     EndIf
     If H_Pool[i] && mx > H_PoolRoom - aiPool
         mx = H_PoolRoom - aiPool
-    EndIf
-    If H_Cola[i] && mx > H_ColaRoom - aiCola
-        mx = H_ColaRoom - aiCola
     EndIf
     Float r = H_Rad[i]
     If r > 0.0
@@ -3962,11 +4098,7 @@ Function HealSearch(Int i, Float afTotal, Float afPen, Int aiN, Float afCost, In
             If H_Pool[i]
                 pl += k
             EndIf
-            Int cl = aiCola
-            If H_Cola[i]
-                cl += k
-            EndIf
-            HealSearch(i + 1, tot, afPen + kf * H_Pen[i], aiN + k, afCost + kf * H_Cost[i], pl, cl, afRads + kf * r)
+            HealSearch(i + 1, tot, afPen + kf * H_Pen[i], aiN + k, afCost + kf * H_Cost[i], pl, afRads + kf * r)
         EndIf
         k -= 1
     EndWhile
@@ -3976,20 +4108,23 @@ EndFunction
 ; §4.3: по одной выбрасываем строку плана, без которой ни одна нужда не
 ; становится хуже (в пределах допуска). Из таких — самую дорогую; повторяем,
 ; пока есть что выбросить. Строки под конечности, болезни и зависимости не
-; трогаются: их нужда — не число, а факт.
+; трогаются: их нужда — не число, а факт. ОД — число: кола, взятая на ОД,
+; бывает лишней, если стадия C добавила ОД-напитков на лечение.
 Function Trim()
     Float tolHP = HPTolerance()
+    Float tolAP = APTolerance()
     Bool removed = true
     While removed
         removed = false
         Float baseHP = Math.Max(HPShortfall(-1), tolHP)
         Float baseRad = Math.Max(RadShortfall(-1), RAD_TOLERANCE)
+        Float baseAP = Math.Max(APShortfall(-1), tolAP)
         Int drop = -1
         Float dropCost = 0.0
         Int e = 0
         While e < P_K.Length
-            If P_For[e] == NEED_HP || P_For[e] == NEED_RADS
-                If HPShortfall(e) <= baseHP + 0.01 && RadShortfall(e) <= baseRad + 0.01
+            If P_For[e] == NEED_HP || P_For[e] == NEED_RADS || P_For[e] == NEED_AP
+                If HPShortfall(e) <= baseHP + 0.01 && RadShortfall(e) <= baseRad + 0.01 && APShortfall(e) <= baseAP + 0.01
                     If drop < 0 || P_Cost[e] > dropCost
                         drop = e
                         dropCost = P_Cost[e]
@@ -4015,6 +4150,9 @@ EndFunction
 Int Function PhaseOf(Int e)
     Int need = P_For[e]
     If need == NEED_LIMBS
+        Return 1
+    ElseIf need == NEED_AP && !K_AfterFood[P_K[e]]
+        ; ОД нужны сейчас (бой), и лечение колы должна увидеть перепроверка ОЗ.
         Return 1
     ElseIf need == NEED_RADS && !K_AfterFood[P_K[e]]
         Return 2
@@ -4080,7 +4218,8 @@ Function WriteReport(Actor akPlayer)
     Log("  NEED   hp=" + R0(N_HP) + " (" + R0(N_HPPctEff) + "% of effMax after rads " + \
         R0(N_EffMaxAfter) + ")  rads=" + R0(N_Rads) + "  hunger=" + R1(N_Hunger) + \
         "  thirst=" + R1(N_Thirst) + "  limbs=" + N_Limbs + "  disease=" + N_Disease + \
-        "  addiction=" + N_Addiction + "  ap=" + N_AP)
+        "  addiction=" + N_Addiction + "  ap=" + R0(N_APNeed) + " (100% = " + R0(S_APFull) + \
+        ", в полёте +" + R0(S_InAP) + ", напитки " + OnOff(N_APAllowed, "") + ")")
 
     If LOG_LEVEL >= LOG_DETAILED
         WriteCandidates(akPlayer)
@@ -4100,6 +4239,17 @@ Function WriteCandidates(Actor akPlayer)
         ", rads " + C_RadsCount + ", limbs " + C_LimbsCount + ", hunger " + C_HungerCount + \
         ", thirst " + C_ThirstCount + ", disease " + C_DiseaseCount + ", addict " + \
         C_AddictionCount + ", ap " + C_APCount)
+    If C_ColaKept > 0
+        String kept = ""
+        Int c = 0
+        While c < K_Forms.Length
+            If K_ColaKeep[c] > 0
+                kept = Join(kept, CandName(c) + " x" + K_ColaKeep[c])
+            EndIf
+            c += 1
+        EndWhile
+        Log("         запас колы " + COLA_RESERVE + " (лучшие по ОД): " + kept)
+    EndIf
     If !C_HungerWillClose
         Log("         M4: голод закрыть нечем — еда не подействует, в план не берётся")
     EndIf
@@ -4120,6 +4270,9 @@ Function WriteCandidates(Actor akPlayer)
         EndIf
         If K_RadIn[k] > 0.0
             line += ", +" + R1(K_RadIn[k]) + " rad"
+        EndIf
+        If K_AP[k] > 0.0
+            line += ", +" + R0(K_AP[k]) + " AP"
         EndIf
         If K_Risk[k] > 0
             line += ", risk " + K_Risk[k] + "%"
@@ -4170,6 +4323,9 @@ String Function PlanLines(Int aiNeed)
             If K_RadIn[k] > 0.0
                 what = Join(what, "+" + R1(K_RadIn[k] * qty) + " rad")
             EndIf
+            If K_AP[k] > 0.0
+                what = Join(what, "+" + R0(K_AP[k] * qty) + " AP")
+            EndIf
             If K_Risk[k] > 0
                 what = Join(what, "risk " + K_Risk[k] + "%")
             EndIf
@@ -4200,6 +4356,7 @@ Function WritePlan()
     WritePlanNeed("limbs ", NEED_LIMBS, N_Limbs > 0)
     WritePlanNeed("disease", NEED_DISEASE, N_Disease > 0)
     WritePlanNeed("addict", NEED_ADDICTION, N_Addiction > 0)
+    WritePlanNeed("ap    ", NEED_AP, N_APNeed > 0.0 || PlanLines(NEED_AP) != "")
     WritePlanNeed("hp    ", NEED_HP, N_HP > 0.0 || PlanLines(NEED_HP) != "")
     If N_Hunger > 0.0
         String h = "нечем"
@@ -4231,11 +4388,11 @@ Function WritePlan()
     Log("  COVER  hp " + R0(Math.Min(T_Heal, hpNeed)) + "/" + R0(hpNeed) + " (потолок после плана " + \
         R0(EffMax(T_RadOut, T_RadIn)) + ", лечение плана " + R0(T_Heal) + ")  rads " + \
         R0(Math.Min(T_RadOut, radNeed)) + "/" + R0(radNeed) + " (вывод плана " + R0(T_RadOut) + \
-        ", съедено +" + R1(T_RadIn) + ")")
+        ", съедено +" + R1(T_RadIn) + ")  ap " + R0(Math.Min(T_AP, N_APNeed)) + "/" + R0(N_APNeed))
     Log("  ORDER  " + OrderText())
 EndFunction
 
-; Порядок приёма по §4.4: 1 конечности, 2 вывод радиации, 3-4 циклы голода
+; Порядок приёма по §4.4: 1 конечности и ОД, 2 вывод радиации, 3-4 циклы голода
 ; и жажды, 5 добор ОЗ (и всё, что M4 велит есть сытым), 6 болезни и зависимости.
 String Function OrderText()
     String out = ""
@@ -4280,7 +4437,7 @@ String Function UnmetText()
         If P_LimitHit
             why = "лимит " + MAX_PLAN_ITEMS + " предметов"
         ElseIf P_ReserveHit
-            why = "осталось только в запасе (еда " + FOOD_RESERVE + ", кола " + COLA_RESERVE + ")"
+            why = "осталось только в запасе (еда " + FOOD_RESERVE + ", лучшая по ОД кола " + COLA_RESERVE + ")"
         ElseIf C_HPCount > 0
             why = "лечения в инвентаре не хватило"
         EndIf
@@ -4308,6 +4465,18 @@ String Function UnmetText()
             why = "средств вывода не хватило"
         EndIf
         out = Join(out, "rads (" + R0(radLeft) + " осталось): " + why)
+    EndIf
+    Float apLeft = APShortfall(-1)
+    If apLeft > APTolerance()
+        String why = "нет напитков с ОД"
+        If P_LimitHit
+            why = "лимит " + MAX_PLAN_ITEMS + " предметов"
+        ElseIf C_APCount > 0
+            why = "напитков с ОД не хватило"
+        ElseIf C_ColaKept > 0
+            why = "кола только в запасе (" + COLA_RESERVE + ")"
+        EndIf
+        out = Join(out, "ap (" + R0(apLeft) + " осталось): " + why)
     EndIf
     ; При исполнении голод и жажду оценивают сами циклы (E_Unmet ниже).
     If E_DryRun && N_Hunger > 0.0 && C_HungerCount == 0
@@ -4438,8 +4607,10 @@ Function ReadAfter(Actor akPlayer)
         A_InRadOut = S_InRadOut
         A_Crippled = S_CrippledCount
         A_MaxHP = S_MaxHP
+        A_AP = S_AP
         Return
     EndIf
+    A_AP = akPlayer.GetValue(AV_AP)
     ScanInFlight(akPlayer)
     A_HP = akPlayer.GetValue(AV_Health)
     A_Rads = akPlayer.GetValue(AV_Rads)
@@ -4474,6 +4645,10 @@ String Function AfterText()
     If A_Crippled > 0
         out += ", покалечено: " + A_Crippled
     EndIf
+    ; ОД — только когда они были нуждой: иначе лишний шум в сводке.
+    If N_APNeed > 0.0
+        out += ", AP " + R0(A_AP) + "/" + R0(S_APFull)
+    EndIf
     Return out
 EndFunction
 
@@ -4482,7 +4657,8 @@ EndFunction
 ; =====================================================================
 
 ; Порядок §4.4 отличается от порядка планирования:
-;   1 стимпак на конечности и 2 вывод радиации (не еда) — первыми: стимпак
+;   1 стимпак на конечности и ОД-напитки (ОД нужны сейчас, их лечение увидит
+;     перепроверка ОЗ фазы 5) и 2 вывод радиации (не еда) — первыми: стимпак
 ;     вызывает жажду, RadAway — голод (M8), их снимут циклы 3-4;
 ;   3 цикл по голоду, 4 цикл по жажде — замкнутые (§1.1): принял -> дождался
 ;     смены стадии -> решил, нужно ли ещё. Величины насыщения не нужны;
@@ -4557,8 +4733,8 @@ Bool Function ApplyEntry(Actor akPlayer, Int e)
         Skip(e, "запас еды: осталось " + FoodPoolLeft() + ", держим " + FOOD_RESERVE)
         Return false
     EndIf
-    If COLA_RESERVE > 0 && K_InCola[k] && ColaPoolLeft() - 1 < COLA_RESERVE
-        Skip(e, "запас колы: осталось " + ColaPoolLeft() + ", держим " + COLA_RESERVE)
+    If K_ColaKeep[k] > 0 && FreeLeft(k) <= 0
+        Skip(e, "запас колы: " + K_ColaKeep[k] + " шт. не тратим")
         Return false
     EndIf
     If !Consume(akPlayer, k)
@@ -4574,6 +4750,9 @@ Bool Function ApplyEntry(Actor akPlayer, Int e)
     EndIf
     If K_RadIn[k] > 0.0
         what = Join(what, "+" + R1(K_RadIn[k]) + " rad")
+    EndIf
+    If K_AP[k] > 0.0
+        what = Join(what, "+" + R0(K_AP[k]) + " AP")
     EndIf
     String label = NeedName(P_For[e])
     If P_For[e] == NEED_LIMBS && K_Heal[k] > 0.0
@@ -4700,8 +4879,7 @@ Int Function LoopPick(Int aiUse)
     Bool bestFree = false
     Int k = 0
     While k < K_Forms.Length
-        If Has(K_Uses[k], aiUse) && !E_Bad[k] && K_Counts[k] - E_Used[k] > 0 && LoopRadsAllowed(k) && \
-                !(COLA_RESERVE > 0 && K_InCola[k] && ColaPoolLeft() - 1 < COLA_RESERVE)
+        If Has(K_Uses[k], aiUse) && !E_Bad[k] && FreeLeft(k) > 0 && LoopRadsAllowed(k)
             Bool isFree = K_Counts[k] - E_Used[k] - PendingPlanned(k) > 0
             Float cost = LoopCost(k)
             If best < 0 || (isFree && !bestFree) || (isFree == bestFree && cost < bestCost)

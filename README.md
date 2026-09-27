@@ -25,6 +25,9 @@ Written for the author's own Survival playthrough; the code is public domain, ta
   does not hinder you.
 - **Diseases and addictions** are detected from the live effect snapshot, not from `HasSpell`
   (which never sees a real addiction).
+- **Action points.** When AP drinks are allowed (in combat only by default, and only below an AP
+  threshold), the mod refills AP to 100% with Nuka-Cola, Vim and the like, and their healing
+  counts toward health. A cola reserve keeps the bottles that restore the most AP.
 - **Prevention, independent of the automatic mode:** herbal remedies before sleep and after
   risky food, Rad-X when radiation rises fast for long enough.
 - **Automatic mode** (off by default) with its own health and radiation thresholds: a cheap

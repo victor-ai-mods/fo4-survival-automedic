@@ -41,11 +41,16 @@ HUNGER_TARGET = 0
 FOOD_RESERVE_DEFAULT = 10
 # 2026-09-22: ОД-напитки (> AP_BIG_PCT % максимума ОД без дебафов) — только при
 # ОД ниже AP_TRIGGER_PCT (MCM ApItemsBelowPct); запас колы — MCM ColaReserve.
-AP_TRIGGER_PCT, AP_BIG_PCT = 30.0, 10.0
+AP_TRIGGER_PCT, AP_BIG_PCT = 30.0, 5.0
+# Запирается вне разрешения только крупное (> AP_LOCK_PCT); под нужду ОД — всё > AP_BIG_PCT.
+AP_LOCK_PCT = 10.0
 AP_ITEMS_MODE = 1  # 0 никогда, 1 только в бою, 2 всегда (MCM ApItemsMode)
+# 2026-09-27: пока ОД-напитки разрешены — нужда «ОД до 100 %» (PlanAP); запас
+# колы — самые сильные по ОД бутылки (ReserveCola).
+AP_TOLERANCE_PCT = 5.0
 
-NEED_RADS, NEED_LIMBS, NEED_HP, NEED_DISEASE, NEED_ADDICTION = 1, 2, 3, 4, 5
-NEED_NAMES = {1: 'rads', 2: 'limbs', 3: 'hp', 4: 'disease', 5: 'addict'}
+NEED_RADS, NEED_LIMBS, NEED_HP, NEED_DISEASE, NEED_ADDICTION, NEED_AP = 1, 2, 3, 4, 5, 6
+NEED_NAMES = {1: 'rads', 2: 'limbs', 3: 'hp', 4: 'disease', 5: 'addict', 6: 'ap'}
 
 
 def has(flags, name):
@@ -111,7 +116,8 @@ class Player:
         self.use_exclusions = kw.get('use_exclusions', True)
         self.ap_pct = kw.get('ap_pct', 1.0)       # GetValuePercentage(AP)
         self.ap_base = kw.get('ap_base', 90.0)    # GetBaseValue(AP)
-        self.ap_max = kw.get('ap_max', self.ap_base)  # текущий максимум
+        self.ap_max = kw.get('ap_max', self.ap_base)  # текущий максимум (S_APFull)
+        self.in_ap = kw.get('in_ap', 0.0)         # ОД «в полёте»
         self.cola_reserve = kw.get('cola_reserve', 0)
         self.in_combat = kw.get('in_combat', False)
 
@@ -140,6 +146,18 @@ class Planner:
         self.hp_triggered = pct <= HEAL_TRIGGER_PCT
         self.n_hp = self.need_hp_given(self.n_rads, 0.0)
         self.n_limbs = p.limbs
+        # ApDrinksAllowed + нужда ОД до 100 %.
+        ap_pct = p.ap_pct * 100.0
+        self.ap_allowed = not (AP_ITEMS_MODE == 0 or (AP_ITEMS_MODE == 1 and not p.in_combat)) and \
+            (AP_TRIGGER_PCT >= 100 or ap_pct < AP_TRIGGER_PCT)
+        self.n_ap = 0.0
+        if self.ap_allowed:
+            need = p.ap_max - p.ap_max * p.ap_pct - p.in_ap
+            if need > self.ap_tol():
+                self.n_ap = need
+
+    def ap_tol(self):
+        return self.p.ap_max * AP_TOLERANCE_PCT / 100.0
 
     def need_rads(self, rad_in):
         p = self.p
@@ -210,11 +228,10 @@ class Planner:
     def evaluate(self):
         p = self.p
         ap_big = max(p.ap_base, p.ap_max) * AP_BIG_PCT / 100.0
-        ap_low = AP_TRIGGER_PCT >= 100 or p.ap_pct * 100.0 < AP_TRIGGER_PCT
-        if AP_ITEMS_MODE == 0 or (AP_ITEMS_MODE == 1 and not p.in_combat):
-            ap_low = False
+        self.ap_big = ap_big
+        ap_lock = max(p.ap_base, p.ap_max) * AP_LOCK_PCT / 100.0
         for c in self.k:
-            c['ap_locked'] = not ap_low and c['d'].get('apRestore', 0.0) > ap_big
+            c['ap_locked'] = not self.ap_allowed and c['d'].get('apRestore', 0.0) > ap_lock
             c['in_cola'] = has(c['flags'], 'FLAG_CAT_COLA')
         hunger_cands = [c for c in self.k if has(c['flags'], 'FLAG_SATES_HUNGER') and not c['ap_locked']]
         self.hunger_will_close = p.hunger < 0.5 or (self.n_hunger > 0 and HUNGER_TARGET == 0 and hunger_cands)
@@ -249,13 +266,27 @@ class Planner:
             elif d.get('MedicRadMag', 0.0) > 0 and d.get('MedicRadDur', 0.0) > 0:
                 reserve = RESERVE_RADAWAY
             c['avail'] = max(0, c['count'] - reserve)
+            c['ap'] = 0.0 if c['dead'] else d.get('apRestore', 0.0)
             if c['ap_locked']:
-                c['heal'] = c['rad_out'] = 0.0
+                c['heal'] = c['rad_out'] = c['ap'] = 0.0
                 c['avail'] = 0
             c['in_pool'] = has(flags, 'FLAG_SATES_HUNGER') and \
                 (p.food_reserve_rads or d.get('radsAdd', 0.0) <= 0)
             if rad_out > 0:
                 self.rads_count += 1
+        self.reserve_cola()
+
+    def reserve_cola(self):
+        """ReserveCola: cola_reserve самых сильных по ОД бутылок не тратится."""
+        self.cola_kept = 0
+        left = self.p.cola_reserve
+        colas = sorted((c for c in self.k if c['in_cola']),
+                       key=lambda c: (-c['d'].get('apRestore', 0.0), -c['d'].get('healHP', 0.0), -c['value']))
+        for c in colas:
+            take = min(c['count'], left)
+            c['avail'] = max(0, c['avail'] - take)
+            self.cola_kept += take
+            left -= take
 
     # --- Plan ---
     def plan(self):
@@ -265,6 +296,7 @@ class Planner:
         self.plan_rads()
         self.plan_limbs()
         self.plan_cures()
+        self.plan_ap()
         self.plan_health()
         if self.rad_short() > RAD_TOLERANCE and self.rads_count > 0 and                 'rads: rest unprofitable' not in self.notes:
             self.plan_rads()
@@ -283,6 +315,10 @@ class Planner:
             immuno = immuno or has(c['flags'], 'FLAG_IMMUNO_DEF')
         return heal, out, rin, immuno
 
+    def ap_short(self, ex=-1):
+        got = sum(c['ap'] for i, (c, _, _) in enumerate(self.P) if i != ex)
+        return max(0.0, self.n_ap - got)
+
     def rad_short(self, ex=-1):
         _, out, rin, _ = self.totals(ex)
         return max(0.0, self.need_rads(rin) - out)
@@ -294,18 +330,9 @@ class Planner:
     def food_pool(self):
         return sum(c['count'] for c in self.k if c['in_pool'])
 
-    def cola_planned(self):
-        return sum(1 for e in self.P if e[0]['in_cola'])
-
-    def cola_pool(self):
-        return sum(c['count'] for c in self.k if c['in_cola'])
-
     def reserve_blocks(self, c):
-        if self.p.cola_reserve > 0 and c['in_cola'] and \
-                self.cola_pool() - self.cola_planned() - 1 < self.p.cola_reserve:
-            self.reserve_hit = True
-            return True
-        """ReserveBlocks: ещё одна штука опустила бы запас еды ниже порога."""
+        """ReserveBlocks: ещё одна штука опустила бы запас еды ниже порога.
+        Запас колы — не здесь: он вычтен из avail заранее (reserve_cola)."""
         if self.p.food_reserve <= 0 or not c['in_pool']:
             return False
         taken = sum(1 for e in self.P if e[0]['in_pool'])
@@ -410,6 +437,21 @@ class Planner:
                 self.add(min(cands, key=lambda c: self.cost(c) - min(c['heal'], self.hp_short()) * 0.1),
                          need)
 
+    # --- PlanAP: ОД до 100 %, жадно по min(ОД, остаток) / (цена + радиация в ОЗ) ---
+    def plan_ap(self):
+        hpr = self.p.max_hp / RADS_MAX
+        rem = self.ap_short()
+        while rem > self.ap_tol():
+            cands = [c for c in self.k if c['ap'] > self.ap_big and self.left(c) > 0
+                     and self.rads_allowed(c) and not self.reserve_blocks(c)]
+            if not cands:
+                return
+            best = max(cands, key=lambda c: min(c['ap'], rem) / (self.cost(c) + c['rad_in'] * hpr))
+            self.trace.append('PICK ap rem %d: %s +%d' % (rem, best['name'], best['ap']))
+            if not self.add(best, NEED_AP):
+                return
+            rem = self.ap_short()
+
     # --- PlanHealth: набор с минимальным перелечением (HealSearch в .psc) ---
     # Цена здесь — только последний тай-брейк: ключ сравнения наборов —
     # (не добрали?, потери ОЗ, штук, цена). Потери = перелечение (или
@@ -432,9 +474,6 @@ class Planner:
         if p.food_reserve > 0:
             taken = sum(1 for e in self.P if e[0]['in_pool'])
             pool_room = self.food_pool() - taken - p.food_reserve
-        cola_room = None
-        if p.cola_reserve > 0:
-            cola_room = self.cola_pool() - self.cola_planned() - p.cola_reserve
         types = []
         for c in self.k:
             if c['heal'] <= 0 or self.left(c) <= 0:
@@ -449,18 +488,17 @@ class Planner:
                 continue
             types.append({'c': c, 'cov': cov, 'pen': c['rad_in'] * hpr, 'cost': self.cost(c),
                           'left': self.left(c), 'pool': c['in_pool'] and pool_room is not None,
-                          'cola': c['in_cola'] and cola_room is not None,
                           'rad': c['rad_in']})
         if not types:
             return
         types.sort(key=lambda t: (-t['cov'], t['cost']))
         s = {'rem': rem, 'goal': rem - tol, 'slots': MAX_PLAN_ITEMS - len(self.P),
-             'rad_room': rad_room, 'rad_cap': rad_cap, 'pool_room': pool_room, 'cola_room': cola_room,
+             'rad_room': rad_room, 'rad_cap': rad_cap, 'pool_room': pool_room,
              'cur': [0] * len(types), 'best': None, 'nodes': 0}
         if s['slots'] <= 0:
             self.limit_hit = True
             return
-        self.heal_search(types, s, 0, 0.0, 0.0, 0, 0.0, 0, 0, 0.0)
+        self.heal_search(types, s, 0, 0.0, 0.0, 0, 0.0, 0, 0.0)
         best = s['best']
         if best is None:
             return
@@ -473,7 +511,7 @@ class Planner:
                     return
         if best[0] == 1 and s['slots'] == sum(best[4]):
             self.limit_hit = True
-        if best[0] == 1 and any(t['pool'] or t['cola'] for t in types):
+        if best[0] == 1 and (self.cola_kept > 0 or any(t['pool'] for t in types)):
             self.reserve_hit = True
 
     HEAL_NODE_BUDGET, HEAL_EPS = 1000, 0.5
@@ -500,7 +538,7 @@ class Planner:
         if self.heal_better(key, s['best']):
             s['best'] = key + (list(s['cur']),)
 
-    def heal_search(self, types, s, i, total, pen, n, cost, pool, cola, rads):
+    def heal_search(self, types, s, i, total, pen, n, cost, pool, rads):
         s['nodes'] += 1
         if i >= len(types) or n >= s['slots'] or s['nodes'] > self.HEAL_NODE_BUDGET:
             self.heal_offer(s, total, pen, n, cost)
@@ -522,8 +560,6 @@ class Planner:
         mx = min(t['left'], s['slots'] - n)
         if t['pool']:
             mx = min(mx, s['pool_room'] - pool)
-        if t['cola']:
-            mx = min(mx, s['cola_room'] - cola)
         if t['rad'] > 0:
             room = s['rad_room'] - rads
             if s['rad_cap'] is not None:
@@ -537,7 +573,7 @@ class Planner:
         for k in range(top, -1, -1):
             s['cur'][i] = k
             args = (total + k * t['cov'], pen + k * t['pen'], n + k, cost + k * t['cost'],
-                    pool + (k if t['pool'] else 0), cola + (k if t['cola'] else 0), rads + k * t['rad'])
+                    pool + (k if t['pool'] else 0), rads + k * t['rad'])
             if k > 0 and args[0] >= s['goal']:
                 s['nodes'] += 1
                 self.heal_offer(s, *args[:4])
@@ -550,11 +586,13 @@ class Planner:
         while True:
             base_hp = max(self.hp_short(), tol_hp)
             base_rad = max(self.rad_short(), RAD_TOLERANCE)
+            base_ap = max(self.ap_short(), self.ap_tol())
             drop = None
             for i, (c, need, cost) in enumerate(self.P):
-                if need not in (NEED_HP, NEED_RADS):
+                if need not in (NEED_HP, NEED_RADS, NEED_AP):
                     continue
-                if self.hp_short(i) <= base_hp + 0.01 and self.rad_short(i) <= base_rad + 0.01:
+                if self.hp_short(i) <= base_hp + 0.01 and self.rad_short(i) <= base_rad + 0.01 and \
+                        self.ap_short(i) <= base_ap + 0.01:
                     if drop is None or cost > self.P[drop][2]:
                         drop = i
             if drop is None:
@@ -573,8 +611,8 @@ class Planner:
 
     def report(self):
         heal, out, rin, _ = self.totals()
-        lines = ['  need hp=%d rads=%d limbs=%d | hunger closes: %s' % (
-            self.n_hp, self.n_rads, self.n_limbs, bool(self.hunger_will_close))]
+        lines = ['  need hp=%d rads=%d limbs=%d ap=%d (short %d) | hunger closes: %s' % (
+            self.n_hp, self.n_rads, self.n_limbs, self.n_ap, self.ap_short(), bool(self.hunger_will_close))]
         if self.verbose:
             lines += ['  ' + t for t in self.trace]
         for (name, need), qty in self.result().items():
@@ -686,14 +724,43 @@ SCENARIOS = [
      # штукам, лапша дешевле.
      dict(hp=383), {'Nuka-Cherry': 3, 'Noodle Cup': 3, 'Purified Water': 1},
      {('Noodle Cup', 'hp'): 3}),
-    ('20. То же при ОД 20 %: Ядер-Вишня снова кандидат',
-     # Вишня 50 - 5 rad + лапша 40 = 90 + 2.2 от радиации: недобор в допуске, потери 2.4.
+    ('20. То же при ОД 20 % в бою: Вишня x3 на ОД закрывает и ОЗ',
+     # 2026-09-27: нужда ОД 90 - 18 = 72. Вишня 25 ОД — три штуки (75). Их лечение
+     # 150 >= 97, стадии C добирать нечего — лапша не нужна.
      dict(hp=383, ap_pct=0.2, in_combat=True), {'Nuka-Cherry': 3, 'Noodle Cup': 3, 'Purified Water': 1},
-     {('Nuka-Cherry', 'hp'): 1, ('Noodle Cup', 'hp'): 1}),
-    ('21. Запас колы 3: из 4 колы на лечение уходит одна',
-     # ОД низкие, стимпаков нет. Nuka-Cherry 50 x? — тратить можно 4 - 3 = 1.
+     {('Nuka-Cherry', 'ap'): 3}),
+    ('21. Запас колы 3: из 4 колы тратится одна (на ОД)',
+     # ОД низкие, стимпаков нет. Тратить можно 4 - 3 = 1 — она идёт на ОД (стадия
+     # до лечения), её 50 ОЗ в зачёт; остальные 150 ОЗ лечить нечем.
      dict(hp=280, ap_pct=0.2, in_combat=True, cola_reserve=3), {'Nuka-Cherry': 4},
-     {('Nuka-Cherry', 'hp'): 1}),
+     {('Nuka-Cherry', 'ap'): 1}),
+    ('22. Бой, ОД 0 из 110: Дикая x5 + обычная кола на хвост',
+     # Нужда 110, допуск 5.5. ОД-напиток — больше 5 % максимума (> 5.5 ОД), обычная
+     # кола (10) в счёт. Дикая 0.51 против обычной 0.26 — пять Диких (100). Хвост 10:
+     # шестая Дикая (последняя, +10 за редкость) 10/47.4 = 0.21 хуже обычной 0.26.
+     dict(ap_pct=0.0, ap_base=110.0, ap_max=110.0, in_combat=True),
+     {'Nuka-Cola Wild': 6, 'Nuka-Cola': 10},
+     {('Nuka-Cola Wild', 'ap'): 5, ('Nuka-Cola', 'ap'): 1}),
+    ('22a. Вне боя при ОД 100 %: обычная кола (10 ОД из 110) не заперта — лечит',
+     # Запирается только > 10 % (11 ОД). Нужда 80: кола 20 ОЗ, радиация 5 опускает
+     # потолок (+2.4 к закрытию) — x4 = 89.6 >= 70.4; x3 = 67.2 — недобор.
+     dict(hp=400, ap_base=110.0, ap_max=110.0), {'Nuka-Cola': 5},
+     {('Nuka-Cola', 'hp'): 4}),
+    ('22b. То же при максимуме 90: хвост 10 закрывает обычная кола',
+     # Нужда 90: Дикая 20/(20+5+10+10/6+2.4)
+     # = 0.51 против 10/38.4 = 0.26 — четыре Дикие (80). Хвост 10: пятая Дикая
+     # (+10/2 за редкость) 10/42.4 = 0.24 хуже обычной 0.26 — обычная.
+     dict(ap_pct=0.0, in_combat=True),
+     {'Nuka-Cola Wild': 6, 'Nuka-Cola': 10},
+     {('Nuka-Cola Wild', 'ap'): 4, ('Nuka-Cola', 'ap'): 1}),
+    ('23. Запас колы 3 — самые сильные по ОД: Вишня x2 и Дикая x1',
+     # Запас: Вишня 25 ОД x2, затем Дикая 20 x1. Тратить: Дикая x1 и обычная x5.
+     # Нужда 72: Дикая (20) + обычная x5 (50) = 70, хвост 2 < допуска 4.5.
+     dict(ap_pct=0.2, in_combat=True, cola_reserve=3),
+     {'Nuka-Cherry': 2, 'Nuka-Cola Wild': 2, 'Nuka-Cola': 5},
+     {('Nuka-Cola Wild', 'ap'): 1, ('Nuka-Cola', 'ap'): 5}),
+    ('24. Вне боя (режим «только в бою»): ОД 0, но кола не трогается',
+     dict(ap_pct=0.0, ap_base=110.0, ap_max=110.0), {'Nuka-Cola Wild': 6, 'Nuka-Cola': 10}, {}),
     ('18. Лог 2026-09-22 #38: сыт, Medic 3, нужда 181 — еда, а не стимпак',
      # Стимпак 422 — перелечение 241. Cake 140 + Soup 55 = 195 (14). Soup x3 + Cram
      # = 165 + 27.4 = 192.4 (11.4 + 2.4 радиацией = 13.8) — в пределах 0.5 от 14,
