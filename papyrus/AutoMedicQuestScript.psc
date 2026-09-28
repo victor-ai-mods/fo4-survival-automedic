@@ -75,6 +75,9 @@ Float Property AP_BIG_PCT = 5.0 AutoReadOnly Hidden
 ; Недобор ОД в пределах допуска (% шкалы) нуждой не считается: иначе ради
 ; последних 2-3 ОД выпивалась бы целая бутылка.
 Float Property AP_TOLERANCE_PCT = 5.0 AutoReadOnly Hidden
+; Ниже этой доли ОД максимум по GetValuePercentage не считается (см. ReadValues):
+; берётся последний надёжный или базовый.
+Float Property AP_PCT_RELIABLE = 0.1 AutoReadOnly Hidden
 ; Сколько бутылок колы (ObjectTypeNukaCola, все виды вместе) не тратить
 ; никогда. В запас идут самые сильные по ОД (решение пользователя 2026-09-27).
 Int COLA_RESERVE = 0
@@ -2331,7 +2334,10 @@ Function ReadValues(Actor akPlayer)
     S_AP = akPlayer.GetValue(AV_AP)
     S_APPct = akPlayer.GetValuePercentage(AV_AP)
     S_APBase = akPlayer.GetBaseValue(AV_AP)
-    If S_APPct > 0.0
+    ; При почти пустых ОД доля ненадёжна: GetValue и GetValuePercentage читаются
+    ; в разные моменты, а ОД в бою меняются быстро. Лог 2026-09-28 11:56:55:
+    ; ОД 3, доля ~0.85 % -> «100 % = 354» при настоящих 115 и план на 351 ОД.
+    If S_APPct >= AP_PCT_RELIABLE
         S_APFull = S_AP / S_APPct
         L_APFull = S_APFull
     Else
@@ -4677,6 +4683,10 @@ Function Execute(Actor akPlayer)
     EndIf
     RunLoop(akPlayer, USE_HUNGER, AV_Hunger, HUNGER_TRIGGER, HUNGER_TARGET, "hunger")
     RunLoop(akPlayer, USE_THIRST, AV_Thirst, THIRST_TRIGGER, THIRST_TARGET, "thirst")
+    ; Еда с ОД (Омлет из яиц болотника: +50 ОД, M4 — только сытым) — фаза 5.
+    ; До 2026-09-28 её не исполнял никто: план из 7 омлетов на ОД молча
+    ; оставался невыпитым (лог 11:56:55, SPENT ничего, UNMET пусто).
+    ExecutePhase(akPlayer, 5, NEED_AP)
     ; Рад-еда (M4 — только сытым) ещё и лечит: её — до перепроверки ОЗ.
     ExecutePhase(akPlayer, 5, NEED_RADS)
     ExecuteHealth(akPlayer)
