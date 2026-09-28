@@ -232,7 +232,7 @@ class Planner:
         ap_lock = max(p.ap_base, p.ap_max) * AP_LOCK_PCT / 100.0
         for c in self.k:
             c['ap_locked'] = not self.ap_allowed and c['d'].get('apRestore', 0.0) > ap_lock
-            c['in_cola'] = has(c['flags'], 'FLAG_CAT_COLA')
+            c['in_cola'] = has(c['flags'], 'FLAG_CAT_COLA') and c['d'].get('apRestore', 0.0) > 0.0
         hunger_cands = [c for c in self.k if has(c['flags'], 'FLAG_SATES_HUNGER') and not c['ap_locked']]
         self.hunger_will_close = p.hunger < 0.5 or (self.n_hunger > 0 and HUNGER_TARGET == 0 and hunger_cands)
         lead = [1.0, 0.45, 0.35, 0.0][min(p.lead_belly, 3)]

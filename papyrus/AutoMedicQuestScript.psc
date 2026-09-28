@@ -3289,7 +3289,8 @@ Function EvalCandidates()
         If K_InPool[k]
             C_FoodPool += K_Counts[k]
         EndIf
-        K_InCola[k] = Has(flags, TF_CAT_COLA)
+        ; В запас колы — только бутылки с ОД: Ядер-Пустоте (одни бафы) там не место.
+        K_InCola[k] = Has(flags, TF_CAT_COLA) && d.ApRestore > 0.0
         If !K_Dead[k]
             K_AP[k] = d.ApRestore
         EndIf
@@ -3345,7 +3346,8 @@ Function EvalCandidates()
     EndWhile
 EndFunction
 
-; Запас колы (MCM ColaReserve): COLA_RESERVE самых сильных по ОД бутылок
+; Запас колы (MCM ColaReserve): COLA_RESERVE бутылок с наибольшим ИТОГОВЫМ
+; восполнением ОД (ApRestore = величина x длительность: Кварц 2 ОД/с x 120 с = 240)
 ; (при равных ОД — лучше лечащих, потом дороже) не тратится ни на что —
 ; ни на ОД, ни на лечение (решение пользователя 2026-09-27). Считаются
 ; бутылки, которые мод вообще может взять (кандидаты), в том числе
