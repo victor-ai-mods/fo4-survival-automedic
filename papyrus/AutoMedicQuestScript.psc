@@ -1108,7 +1108,8 @@ Function Refresh(Bool abForce)
             ", в списке " + AM_AllConsumables.GetSize() + ", эффектов " + AM_Tables.EffectCount() + \
             ", слои исправлений: " + AM_Tables.ActivePatchNames())
     Else
-        Log("Таблица уже собрана: " + AM_Tables.ResolvedCount() + " предметов")
+        Log("Таблица уже собрана: " + AM_Tables.ResolvedCount() + " предметов, слои исправлений: " + \
+            AM_Tables.ActivePatchNames())
     EndIf
     CacheTables()
     Float t0 = Utility.GetCurrentRealTime()
