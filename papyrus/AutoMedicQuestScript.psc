@@ -2405,7 +2405,10 @@ EndFunction
 
 ; Что мод понял из записи игрока — для лога.
 String Function UserRowText(AutoMedicTables:ItemData akRow)
-    String s = "heal " + R0(akRow.HealHP) + " / " + R0(akRow.HealPctOfMax) + "% " + R0(akRow.HealSeconds) + "s"
+    ; Не "s": строки Papyrus без учёта регистра, и "s" склеилась с чьей-то "S"
+    ; (лог 2026-09-30: «10S»).
+    String s = "heal " + R0(akRow.HealHP) + " / " + R0(akRow.HealPctOfMax) + "% " + T("in ", "за ") + \
+        R0(akRow.HealSeconds) + T(" s", " с")
     s += ", rads +" + R0(akRow.RadsAdd) + " -" + R0(akRow.RadsRemove) + ", ap " + R0(akRow.ApRestore)
     s += T(", disease risk ", ", риск болезни ") + akRow.DiseaseRiskPct + "%"
     Int flags = akRow.Flags
