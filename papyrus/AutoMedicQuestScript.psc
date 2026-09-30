@@ -4361,6 +4361,24 @@ Function WritePlanNeed(String asLabel, Int aiNeed, Bool abWanted)
     Log("         " + asLabel + " <- " + lines)
 EndFunction
 
+; Что цикл голода/жажды возьмёт первым — тем же LoopPick, что и при исполнении
+; (цена цикла: крышки + риск болезни + радиация в ОЗ). Раньше здесь стояло
+; «дешевле всего» по одним крышкам, и лог называл Мясо радтаракана за 3c, а цикл
+; честно ел Жареного муравья (лог 2026-09-30 #635). InitExecution здесь только
+; чтобы LoopPick видел пустые E_* этого цикла; исполнение вызовет её заново.
+String Function LoopNote(Int aiUse, Int aiCount)
+    If aiCount <= 0
+        Return "нечем"
+    EndIf
+    InitExecution()
+    Int k = LoopPick(aiUse)
+    If k < 0
+        Return aiCount + " кандидатов, но ни один сейчас не проходит по лимиту радиации"
+    EndIf
+    Return aiCount + " кандидатов, первым пойдёт " + CandName(k) + " (" + K_Values[k] + \
+        "c, цена в цикле " + R1(LoopCost(k)) + ")"
+EndFunction
+
 Function WritePlan()
     Log("  PLAN   (" + P_K.Length + " шт.; голод и жажда — циклы исполнения)" + P_Trace)
     WritePlanNeed("rads  ", NEED_RADS, N_Rads > 0.0 || PlanLines(NEED_RADS) != "")
@@ -4370,20 +4388,10 @@ Function WritePlan()
     WritePlanNeed("ap    ", NEED_AP, N_APNeed > 0.0 || PlanLines(NEED_AP) != "")
     WritePlanNeed("hp    ", NEED_HP, N_HP > 0.0 || PlanLines(NEED_HP) != "")
     If N_Hunger > 0.0
-        String h = "нечем"
-        If C_HungerCheapest >= 0
-            h = C_HungerCount + " кандидатов, дешевле всего " + CandName(C_HungerCheapest) + \
-                " (" + K_Values[C_HungerCheapest] + "c)"
-        EndIf
-        Log("         hunger <- цикл: " + h)
+        Log("         hunger <- цикл: " + LoopNote(USE_HUNGER, C_HungerCount))
     EndIf
     If N_Thirst > 0.0
-        String t = "нечем"
-        If C_ThirstCheapest >= 0
-            t = C_ThirstCount + " кандидатов, дешевле всего " + CandName(C_ThirstCheapest) + \
-                " (" + K_Values[C_ThirstCheapest] + "c)"
-        EndIf
-        Log("         thirst <- цикл: " + t)
+        Log("         thirst <- цикл: " + LoopNote(USE_THIRST, C_ThirstCount))
     EndIf
     If P_Notes != ""
         Log("         note: " + P_Notes)
