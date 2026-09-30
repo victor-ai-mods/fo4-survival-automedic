@@ -58,6 +58,20 @@ per-item exclusion lists, and a diagnostic log with three levels of detail.
 
 Settings are read at the start of every cycle, so changes apply immediately.
 
+Messages and the log are in Russian when the game is (`sLanguage=ru`), and in English
+otherwise.
+
+## Items from other mods
+
+Papyrus cannot read an item's effects, so consumables from other mods are added by hand in
+`Data\SurvivalAutoMedic\items-user.json` (see `items-user.example.json` next to it), one
+per line: `"Plugin.esp|ID|heal=110|sec=10|rads=15"`. You write the numbers (`heal`, `healpct`,
+`sec`, `rads`, `radsout`, `ap`, `risk`) and flags the item cannot show (`disease`,
+`addiction`, `buff`, `addictive`); hunger, thirst, category and disease risk are read from
+the item's keywords. An entry for an item the mod already knows replaces its numbers. With
+the log at Detailed, items in your inventory that the mod does not know are listed as ready
+`Plugin.esp|ID` entries.
+
 English and Russian are included. A new language is one file in
 `Interface\Translations\` (UTF-16 LE with BOM, TAB-separated); nothing needs recompiling.
 

@@ -439,6 +439,9 @@ Int N_Uses
 ; --- кандидаты (сведены по форме) ---
 Int C_Total
 Int C_Unknown
+; Сами формы «вне таблицы» (основной путь инвентаря) — для строки лога с
+; готовыми записями «Плагин.esp|ID» под items-user.json.
+Form[] C_UnknownForms
 Int C_Excluded
 Int C_Idle
 ; Каким путём читался инвентарь: F4SE (GetInventoryItems) или GOEPE (ячейки).
@@ -971,6 +974,9 @@ EndFunction
 AutoMedicTables:ItemData[] TB_Items0
 AutoMedicTables:ItemData[] TB_Items1
 AutoMedicTables:ItemData[] TB_Items2
+; Предметы игрока (items-user.json) — чанк AutoMedicTables.USER_CHUNK.
+AutoMedicTables:ItemData[] TB_Items3
+Int TB_UserChunk = 3
 AutoMedicTables:EffectData[] TB_Effects
 Int TB_ChunkSize = 128
 Int TB_ItemCount = 0
@@ -1004,6 +1010,8 @@ Function CacheTables()
     TB_Items0 = t.ItemChunk(0)
     TB_Items1 = t.ItemChunk(1)
     TB_Items2 = t.ItemChunk(2)
+    TB_Items3 = t.UserItems()
+    TB_UserChunk = t.USER_CHUNK
     TB_Effects = t.GetEffects()
     TB_ChunkSize = t.CHUNK_SIZE
     TB_ItemCount = t.ITEM_COUNT
@@ -1048,6 +1056,8 @@ AutoMedicTables:ItemData[] Function ItemChunkL(Int aiChunk)
         Return TB_Items1
     ElseIf aiChunk == 2
         Return TB_Items2
+    ElseIf aiChunk == 3
+        Return TB_Items3
     EndIf
     Return None
 EndFunction
@@ -1055,10 +1065,10 @@ EndFunction
 ; Как AutoMedicTables.GetItemData, но без внешнего вызова.
 AutoMedicTables:ItemData Function ItemDataL(Int aiRow)
     AutoMedicTables:ItemData[] rows = None
-    If aiRow >= 0 && aiRow < TB_ItemCount
+    If aiRow >= 0 && (aiRow < TB_ItemCount || aiRow / TB_ChunkSize == TB_UserChunk)
         rows = ItemChunkL(aiRow / TB_ChunkSize)
     EndIf
-    If rows == None
+    If rows == None || aiRow % TB_ChunkSize >= rows.Length
         AutoMedicTables:ItemData empty = new AutoMedicTables:ItemData
         Return empty
     EndIf
@@ -1069,6 +1079,12 @@ EndFunction
 Int Function IndexOfFullIdL(Int aiFormId)
     If aiFormId == 0
         Return -1
+    EndIf
+    If TB_Items3 != None
+        Int user = TB_Items3.FindStruct("FullId", aiFormId, 0)
+        If user >= 0
+            Return TB_UserChunk * TB_ChunkSize + user
+        EndIf
     EndIf
     Int chunk = 0
     While chunk < 3
@@ -1145,6 +1161,7 @@ Function Refresh(Bool abForce)
     NC_Names = new String[0]
     S_PerksAt = 0.0
     LoadExclusions()
+    LoadUserItems()
     GiveToolOnce()
     FlushLog()
     ; Шаг 9: реальное время новой сессии идёт с нуля — отметки авторежима
@@ -2142,19 +2159,17 @@ String Function ReadExclusionFile(String asName)
     Int broken = 0
     Int i = 0
     While i < lines.Length
-        String line = lines[i]
-        If GardenOfEden.StrFind(line, "|") > 0 && GardenOfEden.StrFind(line, "_comment") == 0
-            String token = RemoveAll(RemoveAll(RemoveAll(RemoveAll(line, "\""), ","), " "), "\t")
-            String[] parts = GardenOfEden2.GetCommaDelimitedStringAsArray(RemoveAll(token, "|", ","))
+        String[] parts = EntryParts(lines[i])
+        If parts != None
             Int id = 0
             String plugin = ""
-            If parts != None && parts.Length == 2
+            If parts.Length == 2
                 plugin = parts[0]
-                id = GardenOfEden2.HexFormIDToInt(parts[1])
+                id = LocalIdOf(parts[1])
             EndIf
             If id <= 0 || plugin == ""
                 broken += 1
-                Log(T("  exclusions ", "  исключения ") + asName + T(": cannot parse line ", ": не разобрана строка ") + (i + 1) + ": " + token)
+                Log(T("  exclusions ", "  исключения ") + asName + T(": cannot parse line ", ": не разобрана строка ") + (i + 1) + ": " + lines[i])
             Else
                 Form f = Game.GetFormFromFile(id, plugin)
                 If f == None
@@ -2165,7 +2180,7 @@ String Function ReadExclusionFile(String asName)
                         added += 1
                     Else
                         broken += 1
-                        Log(T("  exclusions: more than 128 forms, ", "  исключения: больше 128 форм, ") + token + T(" skipped", " пропущен"))
+                        Log(T("  exclusions: more than 128 forms, ", "  исключения: больше 128 форм, ") + plugin + "|" + parts[1] + T(" skipped", " пропущен"))
                     EndIf
                 EndIf
             EndIf
@@ -2177,6 +2192,251 @@ EndFunction
 
 ; Заменить ВСЕ вхождения asWhat. Документация ReplaceStr не говорит, все ли
 ; вхождения она меняет, поэтому повторяем, пока StrFind (число вхождений) > 0.
+; Строка файла «Плагин.esp|ID|…» -> части без кавычек, табов, пробелов по
+; краям и запятой JSON в конце; None — не запись (комментарий, скобки).
+; Пробелы ВНУТРИ частей остаются: у плагинов бывают имена с пробелами
+; («Unofficial Fallout 4 Patch.esp»), а до 2026-09-30 разбор исключений
+; вырезал все пробелы и такие записи не находил.
+String[] Function EntryParts(String asLine)
+    If GardenOfEden.StrFind(asLine, "|") == 0 || GardenOfEden.StrFind(asLine, "_comment") > 0
+        Return None
+    EndIf
+    String token = TrimSpaces(RemoveAll(RemoveAll(asLine, "\""), "\t"))
+    Int n = GardenOfEden.StrLength(token)
+    If n > 0 && GardenOfEden.SubStr(token, n - 1, 1) == ","
+        token = TrimSpaces(GardenOfEden.SubStr(token, 0, n - 1))
+    EndIf
+    String[] parts = GardenOfEden2.GetCommaDelimitedStringAsArray(RemoveAll(token, "|", ","))
+    If parts == None
+        Return None
+    EndIf
+    Int i = 0
+    While i < parts.Length
+        parts[i] = TrimSpaces(parts[i])
+        i += 1
+    EndWhile
+    Return parts
+EndFunction
+
+String Function TrimSpaces(String asText)
+    Int n = GardenOfEden.StrLength(asText)
+    Int a = 0
+    While a < n && GardenOfEden.SubStr(asText, a, 1) == " "
+        a += 1
+    EndWhile
+    Int b = n
+    While b > a && GardenOfEden.SubStr(asText, b - 1, 1) == " "
+        b -= 1
+    EndWhile
+    If b <= a
+        Return ""
+    EndIf
+    Return GardenOfEden.SubStr(asText, a, b - a)
+EndFunction
+
+; «0F742E», «0x0F742E», «060F742E» (с индексом загрузки), «FE001F12» (ESL) ->
+; локальный ID, который ждёт Game.GetFormFromFile.
+Int Function LocalIdOf(String asHex)
+    String h = RemoveAll(asHex, " ")
+    If GardenOfEden.StrLength(h) > 2 && GardenOfEden.SubStr(h, 0, 2) == "0x"
+        h = GardenOfEden.SubStr(h, 2)
+    EndIf
+    If GardenOfEden.StrLength(h) == 8
+        If GardenOfEden.SubStr(h, 0, 2) == "FE"
+            h = GardenOfEden.SubStr(h, 5)
+        Else
+            h = GardenOfEden.SubStr(h, 2)
+        EndIf
+    EndIf
+    Return GardenOfEden2.HexFormIDToInt(h)
+EndFunction
+
+; =====================================================================
+;  Свои предметы игрока: Data\SurvivalAutoMedic\items-user.json (2026-09-30)
+; =====================================================================
+;
+; Одна запись на строку: "Плагин.esp|ID|ключ=число|флаг|…". Числа — то, что
+; Papyrus у чужого предмета прочитать не может: heal (ОЗ всего), healpct (% от
+; максимума ОЗ), sec (за сколько секунд, 0 — сразу), rads (добавляет рад),
+; radsout (выводит рад), ap (ОД), risk (риск болезни, %, вместо вычисленного).
+; Флаги: disease (лечит болезни), addiction (снимает зависимость), buff (даёт
+; временный баф — голодным не есть, M4.2), addictive (вызывает зависимость —
+; не трогать при выключенной химии). Остальное (еда ли, утоляет ли голод и
+; жажду, категория, риск болезни) — из ключевых слов предмета,
+; AutoMedicTables.FillFromKeywords. Запись для предмета, который уже есть в
+; таблице, заменяет его числа. Пример с пояснениями — items-user.example.json.
+Function LoadUserItems()
+    AutoMedicTables t = AM_Tables
+    AutoMedicTables:ItemData[] rows = new AutoMedicTables:ItemData[0]
+    String summary = T("no file", "нет файла")
+    If GardenOfEden2.DoesFileExist(USER_ITEMS_FILE, MOD_DATA_PATH)
+        summary = ReadUserItems(rows)
+    EndIf
+    t.SetUserItems(rows)
+    TB_Items3 = t.UserItems()
+    Log(T("Your items (", "Свои предметы (") + USER_ITEMS_FILE + "): " + rows.Length + " (" + summary + ")")
+EndFunction
+
+String Property USER_ITEMS_FILE = "items-user.json" AutoReadOnly Hidden
+
+String Function ReadUserItems(AutoMedicTables:ItemData[] akRows)
+    AutoMedicTables t = AM_Tables
+    String[] lines = GardenOfEden2.GetLinesFromFile(USER_ITEMS_FILE, MOD_DATA_PATH)
+    Int missing = 0
+    Int broken = 0
+    Int i = 0
+    While i < lines.Length
+        String[] parts = EntryParts(lines[i])
+        If parts != None
+            String err = ""
+            Int id = 0
+            Form f = None
+            If parts.Length < 3
+                err = T("expected Plugin|ID|effects", "ожидалось Плагин|ID|эффекты")
+            Else
+                id = LocalIdOf(parts[1])
+                If id <= 0 || parts[0] == ""
+                    err = T("bad plugin name or ID", "плохое имя плагина или ID")
+                Else
+                    f = Game.GetFormFromFile(id, parts[0])
+                    If f != None && (f as Potion) == None
+                        err = T("not a consumable (ALCH)", "не расходуемый предмет (ALCH)")
+                    EndIf
+                EndIf
+            EndIf
+            If err == "" && f == None
+                missing += 1
+            ElseIf err == ""
+                err = ParseUserRow(f, id, parts, akRows)
+            EndIf
+            If err != ""
+                broken += 1
+                Log(T("  your items: line ", "  свои предметы: строка ") + (i + 1) + ": " + err + " | " + lines[i])
+            EndIf
+        EndIf
+        i += 1
+    EndWhile
+    Return lines.Length + T(" lines, plugin missing ", " строк, нет плагина ") + missing + \
+        T(", errors ", ", ошибок ") + broken
+EndFunction
+
+; "" — строка добавлена (или заменила прежнюю для того же предмета); иначе ошибка.
+String Function ParseUserRow(Form akItem, Int aiLocalId, String[] asParts, AutoMedicTables:ItemData[] akRows)
+    AutoMedicTables t = AM_Tables
+    AutoMedicTables:ItemData row = new AutoMedicTables:ItemData
+    row.Item = akItem
+    row.LocalId = aiLocalId
+    row.PluginId = -1
+    row.FullId = akItem.GetFormID()
+    Bool cureDisease = false
+    Bool cureAddiction = false
+    Bool buff = false
+    Bool addictive = false
+    Int risk = -1
+    Int p = 2
+    While p < asParts.Length
+        String part = GardenOfEden.ToLowerStr(RemoveAll(asParts[p], " "))
+        String field = part
+        Float value = 0.0
+        If GardenOfEden.StrFind(part, "=") > 0
+            String[] kv = GardenOfEden2.GetCommaDelimitedStringAsArray(RemoveAll(part, "=", ","))
+            If kv == None || kv.Length != 2 || kv[1] == ""
+                Return T("bad value in ", "плохое значение в ") + part
+            EndIf
+            field = kv[0]
+            value = kv[1] as Float
+            If value < 0.0
+                Return T("negative value in ", "отрицательное значение в ") + part
+            EndIf
+        EndIf
+        If field == "heal"
+            row.HealHP = value
+        ElseIf field == "healpct"
+            row.HealPctOfMax = value
+        ElseIf field == "sec"
+            row.HealSeconds = value
+        ElseIf field == "rads"
+            row.RadsAdd = value
+        ElseIf field == "radsout"
+            row.RadsRemove = value
+        ElseIf field == "ap"
+            row.ApRestore = value
+        ElseIf field == "risk"
+            risk = value as Int
+        ElseIf field == "disease"
+            cureDisease = true
+        ElseIf field == "addiction"
+            cureAddiction = true
+        ElseIf field == "buff"
+            buff = true
+        ElseIf field == "addictive"
+            addictive = true
+        ElseIf field != ""
+            Return T("unknown field ", "неизвестный ключ ") + field
+        EndIf
+        p += 1
+    EndWhile
+    Int extra = 0
+    If cureDisease
+        extra += t.FLAG_CURES_DISEASE
+    EndIf
+    If cureAddiction
+        extra += t.FLAG_CURES_ADDICTION
+    EndIf
+    If buff
+        extra += t.FLAG_HAS_BUFF
+    EndIf
+    If addictive
+        extra += t.FLAG_ADDICTIVE
+    EndIf
+    t.FillFromKeywords(row, extra, risk)
+
+    Int known = akRows.FindStruct("Item", akItem, 0)
+    If known >= 0
+        akRows[known] = row
+    ElseIf akRows.Length >= t.USER_MAX
+        Return T("more than ", "больше ") + t.USER_MAX + T(" items, skipped", " предметов, пропущен")
+    Else
+        akRows.Add(row, 1)
+    EndIf
+    LogAt(LOG_DETAILED, "  + " + asParts[0] + "|" + asParts[1] + ": " + UserRowText(row))
+    Return ""
+EndFunction
+
+; Что мод понял из записи игрока — для лога.
+String Function UserRowText(AutoMedicTables:ItemData akRow)
+    String s = "heal " + R0(akRow.HealHP) + " / " + R0(akRow.HealPctOfMax) + "% " + R0(akRow.HealSeconds) + "s"
+    s += ", rads +" + R0(akRow.RadsAdd) + " -" + R0(akRow.RadsRemove) + ", ap " + R0(akRow.ApRestore)
+    s += T(", disease risk ", ", риск болезни ") + akRow.DiseaseRiskPct + "%"
+    Int flags = akRow.Flags
+    If Has(flags, TF_SATES_HUNGER)
+        s += T(", sates hunger", ", утоляет голод")
+    EndIf
+    If Has(flags, TF_SATES_THIRST)
+        s += T(", quenches thirst", ", утоляет жажду")
+    EndIf
+    If Has(flags, TF_CURES_DISEASE)
+        s += T(", cures disease", ", лечит болезни")
+    EndIf
+    If Has(flags, TF_CURES_ADDICTION)
+        s += T(", cures addiction", ", снимает зависимость")
+    EndIf
+    If Has(flags, TF_ADDICTIVE)
+        s += T(", addictive", ", аддиктивный")
+    EndIf
+    If Has(flags, TF_CAT_ALCOHOL)
+        s += T(", alcohol", ", алкоголь")
+    EndIf
+    Return s
+EndFunction
+
+; Кнопка MCM «Перечитать свои предметы». НЕ ПЕРЕИМЕНОВЫВАТЬ.
+Function McmReloadUserItems()
+    LoadUserItems()
+    FlushLog()
+    Debug.Notification("AutoMedic: " + TB_Items3.Length + T(" of your items", " своих предметов"))
+EndFunction
+
 String Function RemoveAll(String asText, String asWhat, String asWith = "")
     Int guard = 0
     While GardenOfEden.StrFind(asText, asWhat) > 0 && guard < 64
@@ -2862,6 +3122,7 @@ EndFunction
 Function CollectCandidates(Actor akPlayer, Int aiForceUses)
     C_Total = 0
     C_Unknown = 0
+    C_UnknownForms = new Form[0]
     C_Excluded = 0
     C_Idle = 0
     C_Path = "-"
@@ -2974,6 +3235,9 @@ Bool Function CollectFromForms(Actor akPlayer, Int aiWanted)
             Int row = IndexOfFormL(item)
             If row < 0
                 C_Unknown += 1
+                If item != AM_Tool && C_UnknownForms.Length < 64
+                    C_UnknownForms.Add(item)
+                EndIf
             ElseIf K_Rows.Find(row) < 0
                 AutoMedicTables:ItemData data = ItemDataL(row)
                 Int uses = UsesOf(data)
@@ -3015,6 +3279,12 @@ EndFunction
 
 ; Как AutoMedicTables.IndexOf(Form), но по локальной копии таблицы.
 Int Function IndexOfFormL(Form akItem)
+    If TB_Items3 != None
+        Int user = TB_Items3.FindStruct("Item", akItem, 0)
+        If user >= 0
+            Return TB_UserChunk * TB_ChunkSize + user
+        EndIf
+    EndIf
     Int chunk = 0
     While chunk < 3
         AutoMedicTables:ItemData[] rows = ItemChunkL(chunk)
@@ -3100,6 +3370,28 @@ Int Function CachedValue(Form akItem)
 EndFunction
 
 ; Имя предмета для лога: из кеша сессии, иначе GetNthItemName по слоту.
+; «Имя Плагин.esp|ID; …» — готовые начала записей items-user.json.
+String Function UnknownText(Actor akPlayer)
+    String out = ""
+    Int i = 0
+    While i < C_UnknownForms.Length
+        Form f = C_UnknownForms[i]
+        Int id = f.GetFormID()
+        Int localId = id % 16777216
+        If id < 0
+            ; FE xxx yyy — лёгкий плагин (ESL): локальный ID — младшие 12 бит.
+            localId = ((id % 4096) + 4096) % 4096
+        EndIf
+        If out != ""
+            out += "; "
+        EndIf
+        out += SlotName(akPlayer, f, CheckedSlot(akPlayer, f, -1)) + " " + \
+            GardenOfEden2.LookupPluginNameByForm(f) + "|" + GardenOfEden.IntToHex(localId)
+        i += 1
+    EndWhile
+    Return out
+EndFunction
+
 String Function SlotName(Actor akPlayer, Form akItem, Int aiSlot)
     Int i = NC_Forms.Find(akItem)
     If i >= 0
@@ -4273,6 +4565,9 @@ Function WriteCandidates(Actor akPlayer)
         ", rads " + C_RadsCount + ", limbs " + C_LimbsCount + ", hunger " + C_HungerCount + \
         ", thirst " + C_ThirstCount + ", disease " + C_DiseaseCount + ", addict " + \
         C_AddictionCount + ", ap " + C_APCount)
+    If C_UnknownForms != None && C_UnknownForms.Length > 0
+        Log(T("         not in table (for items-user.json): ", "         вне таблицы (для items-user.json): ") + UnknownText(akPlayer))
+    EndIf
     If C_ColaKept > 0
         String kept = ""
         Int c = 0

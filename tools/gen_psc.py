@@ -280,6 +280,60 @@ def load_perk_ids(data_dir, needed):
     return {name: int(cache[name], 16) for name in needed}
 
 
+# Ключевые слова для предметов из items-user.json (2026-09-30): эффекты такого
+# предмета игрок вписывает сам, а категории, голод, жажду и риск болезни
+# рантайм берёт из его ключевых слов по тем же правилам, что parse_consumables
+# и item_flags(). Порядок фиксирован: индекс уезжает в скрипт (KW_*).
+USER_KEYWORDS = [
+    'ObjectTypeFood', 'ObjectTypeDrink', 'ObjectTypeWater', 'ObjectTypeChem',
+    'ObjectTypeAlcohol', 'ObjectTypeNukaCola', 'ObjectTypeStimpak',
+    'ObjectTypeCaffeinated', 'ObjectTypeExtraCaffeinated', 'ObjectTypeSyringerAmmo',
+    'FruitOrVegetable', 'CA_ObjType_ChemBad',
+    'HC_SustenanceType_QuenchesThirst', 'HC_SustenanceType_IncreasesThirst',
+    'HC_SustenanceType_IncreasesHunger', 'HC_IgnoreAsFood',
+    'HC_DiseaseRisk_FoodHigh', 'HC_DiseaseRisk_FoodStandard', 'HC_DiseaseRiskChem',
+    'HC_CausesImmunodeficiency', 'AnimFurnWater',
+    'HC_EffectType_Disease', 'HC_EffectType_Hunger', 'HC_EffectType_Sleep',
+    'HC_EffectType_Thirst', 'HC_EffectType_Adrenaline', 'AddictionKeywordJet',
+]
+
+
+def load_keyword_ids(data_dir):
+    """EDID ключевого слова -> локальный FormID в Fallout4.esm (кеш data/keyword_ids.json)."""
+    cache_path = os.path.join(ROOT, 'data', 'keyword_ids.json')
+    cache = {}
+    if os.path.exists(cache_path):
+        with open(cache_path, encoding='utf-8') as f:
+            cache = json.load(f)
+    missing = sorted(set(USER_KEYWORDS) - set(cache))
+    if missing:
+        from esm import Plugin
+        esm_path = os.path.join(data_dir, 'Fallout4.esm')
+        if not os.path.exists(esm_path):
+            raise SystemExit('нет %s, а ключевые слова %s ещё не в кеше %s'
+                             % (esm_path, ', '.join(missing), cache_path))
+        for record in Plugin(esm_path).records(b'KYWD'):
+            if record.editor_id() in missing:
+                cache[record.editor_id()] = '0x%06X' % record.local_id
+        still = sorted(set(USER_KEYWORDS) - set(cache))
+        if still:
+            raise SystemExit('ключевые слова не найдены в Fallout4.esm: %s' % ', '.join(still))
+        with open(cache_path, 'w', encoding='utf-8') as f:
+            json.dump(dict(sorted(cache.items())), f, ensure_ascii=False, indent=1)
+    return [int(cache[name], 16) for name in USER_KEYWORDS]
+
+
+def gen_user_keywords(ids):
+    consts = gen_consts([('KW_' + name.upper(), i) for i, name in enumerate(USER_KEYWORDS)])
+    lines = ['Int[] Function UserKeywordIds() global',
+             '%sInt[] a = new Int[%d]' % (INDENT, len(ids))]
+    for i, (name, value) in enumerate(zip(USER_KEYWORDS, ids)):
+        lines.append('%sa[%d] = 0x%06X  ; %s' % (INDENT, i, value, name))
+    lines.append('%sReturn a' % INDENT)
+    lines.append('EndFunction')
+    return consts + '\n\n' + '\n'.join(lines)
+
+
 def collect(items, perk_ids):
     perks = []
     chances = []
@@ -639,6 +693,7 @@ def main():
             .replace('%%CHUNK_ACCESS%%', chunk_access)
             .replace('%%PLUGIN_FILES%%', gen_plugin_files(files) + '\n\n'
                      + gen_plugin_files([l['plugin'] for l in layers], 'PatchFiles'))
+            .replace('%%USER_KEYWORDS%%', gen_user_keywords(load_keyword_ids(args.data)))
             .replace('%%RAW_DISPATCH%%', raw_dispatch)
             .replace('%%RAW_DATA%%', '\n\n'.join(raw_parts)))
 

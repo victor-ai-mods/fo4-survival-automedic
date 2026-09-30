@@ -236,7 +236,14 @@
          "help": {"en": "Off: the lists are ignored and listed items may be used.", "ru": "Выкл.: списки не действуют, перечисленные предметы могут использоваться."}},
         {"type": "button", "id": "BtnReloadExclusions", "script": "main", "function": "McmReloadExclusions",
          "text": {"en": "[ Reload exclusion lists ]", "ru": "[ Перечитать списки исключений ]"},
-         "help": {"en": "Rereads both files after you edit them. They are also read at every game load.", "ru": "Перечитывает оба файла после правки. Они также читаются при каждой загрузке игры."}}
+         "help": {"en": "Rereads both files after you edit them. They are also read at every game load.", "ru": "Перечитывает оба файла после правки. Они также читаются при каждой загрузке игры."}},
+        {"type": "spacer"},
+        {"type": "section", "id": "SEC_USER_ITEMS", "text": {"en": "Your items from other mods", "ru": "Свои предметы из других модов"}},
+        {"type": "text", "id": "TXT_USER_ITEMS",
+         "text": {"en": "Consumables from other mods can be added in Data\\SurvivalAutoMedic\\items-user.json (create it from items-user.example.json next to it). You write how much the item heals, how many rads it adds or removes and how much AP it restores; hunger, thirst and disease risk are read from the item itself. An entry for a vanilla item replaces its numbers.", "ru": "Расходуемые предметы из других модов добавляются в Data\\SurvivalAutoMedic\\items-user.json (создайте его по образцу items-user.example.json рядом). Вы пишете, сколько предмет лечит, сколько рад добавляет или выводит и сколько ОД восполняет; голод, жажда и риск болезни мод берёт у самого предмета. Запись для ванильного предмета заменяет его числа."}},
+        {"type": "button", "id": "BtnReloadUserItems", "script": "main", "function": "McmReloadUserItems",
+         "text": {"en": "[ Reload your items ]", "ru": "[ Перечитать свои предметы ]"},
+         "help": {"en": "Rereads items-user.json after you edit it. It is also read at every game load. With the log on (Detailed), every entry is written to the log together with what the mod understood from it.", "ru": "Перечитывает items-user.json после правки. Он также читается при каждой загрузке игры. С включённым логом (Подробно) каждая запись попадает в лог вместе с тем, что мод из неё понял."}}
       ]
     },
     {

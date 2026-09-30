@@ -1,0 +1,25 @@
+{
+    "_comment": "Survival AutoMedic: your own consumables from other mods. Copy this file to items-user.json in this folder and add your items. The example file itself is never read.",
+    "_comment": "One item per line: \"Plugin.esp|ID|key=number|flag|...\". ID is the item's FormID as xEdit shows it: 0F12, 00000F12, 06000F12 or FE001F12 (ESL) all work.",
+    "_comment": "Papyrus cannot read an item's effects, so you write the numbers (look them up in xEdit, or on the mod page):",
+    "_comment": "  heal=110     heals 110 HP in total",
+    "_comment": "  healpct=30   heals 30% of max HP (like a stimpak)",
+    "_comment": "  sec=10       over 10 seconds (leave it out for instant)",
+    "_comment": "  rads=15      adds 15 rads",
+    "_comment": "  radsout=100  removes 100 rads",
+    "_comment": "  ap=50        restores 50 AP",
+    "_comment": "  risk=7       disease risk in % (only if the mod's own guess is wrong)",
+    "_comment": "Flags, for what the item does but the mod cannot see:",
+    "_comment": "  disease      cures diseases        addiction  cures addictions",
+    "_comment": "  buff         gives a timed buff    addictive  can cause an addiction",
+    "_comment": "Hunger, thirst, food/drink/chem/alcohol and the disease risk are read from the item's keywords - no need to write them.",
+    "_comment": "An entry for an item that the mod already knows (vanilla, DLC, UFO4P) replaces its numbers - useful if another mod changed that item.",
+    "_comment": "Up to 128 items. Reload in MCM: Items - Reload your items. With the log on (Detailed) every entry is logged with what the mod understood from it.",
+    "_comment": "Examples (the plugins are made up):",
+    "_comment": "  \"MyFoodMod.esp|000F12|heal=110|sec=10|rads=15\",",
+    "_comment": "  \"Some Chems Mod.esp|0008A4|healpct=30|sec=5\",",
+    "_comment": "  \"CleanWater.esl|FE001801|radsout=20\",",
+    "_comment": "  \"Doctor Mod.esp|000812|disease\",",
+    "items": [
+    ]
+}

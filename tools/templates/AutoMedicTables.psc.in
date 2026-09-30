@@ -379,12 +379,200 @@ Int Function FindLoadIndex(Form akFound, Int aiLocalId)
 EndFunction
 
 ; =====================================================================
+;  Предметы игрока (Data\SurvivalAutoMedic\items-user.json, 2026-09-30)
+; =====================================================================
+;
+; Эффекты предмета из чужого мода Papyrus прочитать не может, поэтому числа
+; (лечение, радиация, ОД) вписывает игрок, а всё, что видно по ключевым словам
+; (категории, голод, жажда, риск болезни), считается здесь — по тем же правилам,
+; что parse_consumables.py и gen_psc.item_flags() для ванили. Разбор файла — в
+; AutoMedicQuestScript.LoadUserItems. Эти строки живут в отдельном чанке
+; USER_CHUNK (индексы USER_CHUNK * CHUNK_SIZE + i) и ищутся ПЕРВЫМИ: так запись
+; игрока может заменить числа и у предмета из таблицы (мод, меняющий ванильный
+; предмет). Вариантов по перкам у них нет.
+
+; Генератор проверяет, что основных чанков не больше трёх, так что 3 свободен.
+Int Property USER_CHUNK = 3 AutoReadOnly Hidden
+Int Property USER_MAX = 128 AutoReadOnly Hidden
+
+ItemData[] AM_UserItems
+Keyword[] AM_UserKw
+
+%%USER_KEYWORDS%%
+
+ItemData[] Function UserItems()
+    If AM_UserItems == None
+        AM_UserItems = new ItemData[0]
+    EndIf
+    Return AM_UserItems
+EndFunction
+
+; Новый набор предметов игрока. Прежние убираются из списков нужд, если их нет
+; в основной таблице; новые туда добавляются.
+Function SetUserItems(ItemData[] akRows)
+    ItemData[] old = UserItems()
+    Int i = 0
+    While i < old.Length
+        If old[i].Item != None && IndexOfTable(old[i].Item) < 0
+            AM_AllConsumables.RemoveAddedForm(old[i].Item)
+            AM_ListHP.RemoveAddedForm(old[i].Item)
+            AM_ListRads.RemoveAddedForm(old[i].Item)
+            AM_ListHunger.RemoveAddedForm(old[i].Item)
+            AM_ListThirst.RemoveAddedForm(old[i].Item)
+            AM_ListDisease.RemoveAddedForm(old[i].Item)
+            AM_ListAddiction.RemoveAddedForm(old[i].Item)
+            AM_ListLimbs.RemoveAddedForm(old[i].Item)
+        EndIf
+        i += 1
+    EndWhile
+    AM_UserItems = akRows
+    i = 0
+    While i < akRows.Length
+        AM_AllConsumables.AddForm(akRows[i].Item)
+        AddToNeedLists(akRows[i].Item, akRows[i])
+        i += 1
+    EndWhile
+EndFunction
+
+Bool Function HasUserKw(Form akItem, Int aiKw)
+    Return AM_UserKw[aiKw] != None && akItem.HasKeyword(AM_UserKw[aiKw])
+EndFunction
+
+; Flags и DiseaseRiskPct строки игрока по ключевым словам её предмета.
+; aiExtraFlags — то, что по ключевым словам не видно и игрок указал сам
+; (лечит болезнь / зависимость, баф, аддиктивный); aiRisk >= 0 — его риск
+; болезни вместо вычисленного.
+Function FillFromKeywords(ItemData akRow, Int aiExtraFlags, Int aiRisk)
+    If AM_UserKw == None
+        Int[] ids = UserKeywordIds()
+        AM_UserKw = new Keyword[ids.Length]
+        Int k = 0
+        While k < ids.Length
+            AM_UserKw[k] = Game.GetFormFromFile(ids[k], "Fallout4.esm") as Keyword
+            k += 1
+        EndWhile
+    EndIf
+    Form f = akRow.Item
+    Bool food = HasUserKw(f, KW_OBJECTTYPEFOOD)
+    Bool drink = HasUserKw(f, KW_OBJECTTYPEDRINK)
+    Bool water = HasUserKw(f, KW_OBJECTTYPEWATER)
+    Bool chem = HasUserKw(f, KW_OBJECTTYPECHEM)
+    Bool alcohol = HasUserKw(f, KW_OBJECTTYPEALCOHOL)
+    Bool cola = HasUserKw(f, KW_OBJECTTYPENUKACOLA)
+    Bool ignoreAsFood = HasUserKw(f, KW_HC_IGNOREASFOOD)
+    Bool quench = HasUserKw(f, KW_HC_SUSTENANCETYPE_QUENCHESTHIRST)
+
+    Int flags = aiExtraFlags
+    If food || drink || water || alcohol || cola
+        flags += FLAG_FOOD
+    EndIf
+    If food
+        flags += FLAG_CAT_FOOD
+    EndIf
+    If drink
+        flags += FLAG_CAT_DRINK
+    EndIf
+    If water
+        flags += FLAG_CAT_WATER
+    EndIf
+    If chem
+        flags += FLAG_CAT_CHEM
+    EndIf
+    If HasUserKw(f, KW_CA_OBJTYPE_CHEMBAD)
+        flags += FLAG_CAT_CHEM_BAD
+    EndIf
+    If alcohol
+        flags += FLAG_CAT_ALCOHOL
+    EndIf
+    If cola
+        flags += FLAG_CAT_COLA
+    EndIf
+    If HasUserKw(f, KW_OBJECTTYPECAFFEINATED) || HasUserKw(f, KW_OBJECTTYPEEXTRACAFFEINATED)
+        flags += FLAG_CAT_CAFFEINATED
+    EndIf
+    If HasUserKw(f, KW_OBJECTTYPESTIMPAK)
+        flags += FLAG_CAT_STIMPAK
+    EndIf
+    If HasUserKw(f, KW_FRUITORVEGETABLE)
+        flags += FLAG_CAT_FRUIT_VEG
+    EndIf
+    If HasUserKw(f, KW_OBJECTTYPESYRINGERAMMO)
+        flags += FLAG_CAT_SYRINGER
+    EndIf
+    If quench
+        flags += FLAG_QUENCHES_THIRST
+    EndIf
+    If HasUserKw(f, KW_HC_SUSTENANCETYPE_INCREASESHUNGER)
+        flags += FLAG_INCREASES_HUNGER
+    EndIf
+    If HasUserKw(f, KW_HC_SUSTENANCETYPE_INCREASESTHIRST)
+        flags += FLAG_INCREASES_THIRST
+    EndIf
+    If ignoreAsFood
+        flags += FLAG_IGNORE_AS_FOOD
+        If !chem
+            flags += FLAG_WILD_PLANT
+        EndIf
+    EndIf
+    If HasUserKw(f, KW_HC_CAUSESIMMUNODEFICIENCY)
+        flags += FLAG_IMMUNO_DEF
+    EndIf
+    ; Голод и жажда — ровно правила ванильного HC_ManagerScript (см. gen_psc).
+    If food && !ignoreAsFood && !HasUserKw(f, KW_HC_EFFECTTYPE_DISEASE) && \
+            !HasUserKw(f, KW_HC_EFFECTTYPE_HUNGER) && !HasUserKw(f, KW_HC_EFFECTTYPE_SLEEP) && \
+            !HasUserKw(f, KW_HC_EFFECTTYPE_THIRST) && !HasUserKw(f, KW_HC_EFFECTTYPE_ADRENALINE) && \
+            !HasUserKw(f, KW_ADDICTIONKEYWORDJET)
+        flags += FLAG_SATES_HUNGER
+    EndIf
+    If quench || HasUserKw(f, KW_ANIMFURNWATER)
+        flags += FLAG_SATES_THIRST
+    EndIf
+
+    Int risk = aiRisk
+    If risk < 0
+        risk = 0
+        If HasUserKw(f, KW_HC_DISEASERISK_FOODHIGH)
+            risk = 12
+        ElseIf HasUserKw(f, KW_HC_DISEASERISK_FOODSTANDARD) || HasUserKw(f, KW_HC_DISEASERISKCHEM)
+            risk = 7
+        ElseIf cola
+            risk = 2
+        ElseIf (food || drink || water || alcohol) && !ignoreAsFood
+            risk = 1
+        EndIf
+    EndIf
+    If risk >= 7
+        flags += FLAG_IMMEDIATE_CHECK
+    EndIf
+    akRow.DiseaseRiskPct = risk
+    akRow.Flags = flags
+EndFunction
+
+; Индекс только в основной таблице (без предметов игрока) или -1.
+Int Function IndexOfTable(Form akItem)
+    Int chunk = 0
+    While chunk < ITEM_CHUNKS
+        ItemData[] rows = ItemChunk(chunk)
+        Int slot = rows.FindStruct("Item", akItem, 0)
+        If slot >= 0
+            Return chunk * CHUNK_SIZE + slot
+        EndIf
+        chunk += 1
+    EndWhile
+    Return -1
+EndFunction
+
+; =====================================================================
 ;  Доступ
 ; =====================================================================
 
 ; Данные предмета по индексу в таблице. Индекс вне диапазона даёт пустую
 ; структуру с Item == None — вызывающему достаточно проверить Item.
 ItemData Function GetItemData(Int aIndex)
+    Int userSlot = aIndex - USER_CHUNK * CHUNK_SIZE
+    If userSlot >= 0 && userSlot < UserItems().Length
+        Return AM_UserItems[userSlot]
+    EndIf
     If aIndex < 0 || aIndex >= ITEM_COUNT
         ItemData empty = new ItemData
         Return empty
@@ -399,6 +587,10 @@ EndFunction
 Int Function IndexOf(Form akItem)
     If akItem == None
         Return -1
+    EndIf
+    Int user = UserItems().FindStruct("Item", akItem, 0)
+    If user >= 0
+        Return USER_CHUNK * CHUNK_SIZE + user
     EndIf
     Int chunk = 0
     While chunk < ITEM_CHUNKS
@@ -417,6 +609,10 @@ EndFunction
 Int Function IndexOfFullId(Int aiFormId)
     If aiFormId == 0
         Return -1
+    EndIf
+    Int user = UserItems().FindStruct("FullId", aiFormId, 0)
+    If user >= 0
+        Return USER_CHUNK * CHUNK_SIZE + user
     EndIf
     Int chunk = 0
     While chunk < ITEM_CHUNKS

@@ -37,10 +37,12 @@ def mcm_files():
 
 
 # Прочие файлы мода: (источник в проекте, путь от Data). exclusions-user.json
-# сюда не входит — это файл игрока, раскладка его не трогает.
+# и items-user.json сюда не входят — это файлы игрока, раскладка их не трогает.
 EXTRA_FILES = [
     (os.path.join(ROOT, 'data', 'exclusions-default.json'),
      os.path.join('SurvivalAutoMedic', 'exclusions-default.json')),
+    (os.path.join(ROOT, 'data', 'items-user.example.json'),
+     os.path.join('SurvivalAutoMedic', 'items-user.example.json')),
 ]
 
 

@@ -2,6 +2,7 @@
 data/consumables.json
 data/mgef_index.json
 data/perk_ids.json
+data/keyword_ids.json
 reports/
 
 # Сгенерированное: см. README, раздел «Сборка»
