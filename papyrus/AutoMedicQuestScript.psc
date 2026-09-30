@@ -718,7 +718,7 @@ Function EnsureFileLog()
         EndIf
         LogProbeAppend()
         Log("")
-        Log("=== загрузка сохранения, " + GardenOfEden2.GetCurrentDateAndTimeAsString() + " ===")
+        Log(T("=== save loaded, ", "=== загрузка сохранения, ") + GardenOfEden2.GetCurrentDateAndTimeAsString() + " ===")
     EndIf
 EndFunction
 
@@ -749,15 +749,15 @@ EndFunction
 Function LogProbeAppend()
     Int before = GardenOfEden3.GetFileSize(LOG_FILE, MOD_DATA_PATH)
     String[] probe = new String[1]
-    probe[0] = "(проверка режима записи)"
+    probe[0] = T("(checking the write mode)", "(проверка режима записи)")
     Bool ok = GardenOfEden3.WriteLinesToFile(LOG_FILE, MOD_DATA_PATH, probe, false)
     Int after = GardenOfEden3.GetFileSize(LOG_FILE, MOD_DATA_PATH)
     L_Append = after > before
-    String mode = "дописывание в конец"
+    String mode = T("appending", "дописывание в конец")
     If !L_Append
-        mode = "перезапись файла целиком (WriteLinesToFile без флага не дописывает)"
+        mode = T("rewriting the whole file (WriteLinesToFile without the flag does not append)", "перезапись файла целиком (WriteLinesToFile без флага не дописывает)")
     EndIf
-    Log("Лог: " + mode + " — размер " + before + " -> " + after + " байт, результат " + ok)
+    Log(T("Log: ", "Лог: ") + mode + T(" - size ", " — размер ") + before + " -> " + after + T(" bytes, result ", " байт, результат ") + ok)
 EndFunction
 
 ; Результат OpenUserLog НЕ показатель. Список открытых пользовательских логов
@@ -766,10 +766,32 @@ EndFunction
 ; в него можно. Найдено 2026-09-21: из-за доверия этому false мод молчал
 ; всю сессию, а в сейве рядом с логами AFT лежало имя «AutoMedic».
 ;
+; Язык сообщений и лога (2026-09-30): русский, только если игра русская
+; (sLanguage=ru), иначе английский. Читается на каждой загрузке — язык игры
+; можно сменить между сессиями. GetINISetting из GOEPE читает живое значение
+; ini (Fallout4.ini / Prefs / Custom), без учёта регистра.
+Bool AM_Ru = false
+String AM_Lang = ""
+
+Function DetectLanguage()
+    AM_Lang = GardenOfEden.GetINISetting("sLanguage:General")
+    AM_Ru = AM_Lang == "ru"
+EndFunction
+
+; Строка на языке игры. Тексты MCM переводятся самим MCM ($AM_* в
+; Interface\Translations), а уведомления и лог собираются здесь.
+String Function T(String asEn, String asRu)
+    If AM_Ru
+        Return asRu
+    EndIf
+    Return asEn
+EndFunction
+
 ; Вызывается на OnQuestInit и каждой загрузке: настройки к этому моменту ещё
 ; не прочитаны, поэтому цель лога берётся прямо из AM_Settings. Свой файл
 ; продолжается, загрузка отбивается разделителем (EnsureFileLog).
 Function OpenLog()
+    DetectLanguage()
     L_Buffer = new String[0]
     DropLog()
     L_Probed = false
@@ -1080,7 +1102,7 @@ EndFunction
 
 Event OnQuestInit()
     OpenLog()
-    Log("=== AutoMedic: инициализация ===")
+    Log(T("=== AutoMedic: initialization ===", "=== AutoMedic: инициализация ==="))
     RegisterForRemoteEvent(PlayerRef(), "OnPlayerLoadGame")
     Refresh(false)
 EndEvent
@@ -1097,24 +1119,25 @@ EndEvent
 ; Пересобирает таблицу, если версия данных изменилась, собирает формы
 ; фазы 0 и следит за тем, чтобы предмет-инструмент был у игрока.
 Function Refresh(Bool abForce)
+    Log(T("Language: English (sLanguage=", "Язык: русский (sLanguage=") + AM_Lang + ")")
     If !AM_Tables.IsBuilt() || abForce
         Float started = Utility.GetCurrentRealTime()
         AM_Tables.BuildTables(abForce)
         Float spent = Utility.GetCurrentRealTime() - started
         ; A19 из §10: замерить стоимость ~350 вызовов GetFormFromFile.
-        Log("Таблица собрана за " + spent + " с: разрешено " + AM_Tables.ResolvedCount() + \
-            ", пропущено (нет DLC) " + AM_Tables.SkippedCount() + \
-            ", без полного FormID " + AM_Tables.NoFullIdCount() + \
-            ", в списке " + AM_AllConsumables.GetSize() + ", эффектов " + AM_Tables.EffectCount() + \
-            ", слои исправлений: " + AM_Tables.ActivePatchNames())
+        Log(T("Item table built in ", "Таблица собрана за ") + spent + T(" s: resolved ", " с: разрешено ") + AM_Tables.ResolvedCount() + \
+            T(", skipped (no DLC) ", ", пропущено (нет DLC) ") + AM_Tables.SkippedCount() + \
+            T(", without full FormID ", ", без полного FormID ") + AM_Tables.NoFullIdCount() + \
+            T(", in list ", ", в списке ") + AM_AllConsumables.GetSize() + T(", effects ", ", эффектов ") + AM_Tables.EffectCount() + \
+            T(", patch layers: ", ", слои исправлений: ") + AM_Tables.ActivePatchNames())
     Else
-        Log("Таблица уже собрана: " + AM_Tables.ResolvedCount() + " предметов, слои исправлений: " + \
+        Log(T("Item table already built: ", "Таблица уже собрана: ") + AM_Tables.ResolvedCount() + T(" items, patch layers: ", " предметов, слои исправлений: ") + \
             AM_Tables.ActivePatchNames())
     EndIf
     CacheTables()
     Float t0 = Utility.GetCurrentRealTime()
     ResolveForms()
-    Log("Формы фазы 0 собраны за " + R1((Utility.GetCurrentRealTime() - t0) * 1000.0) + " мс")
+    Log(T("Phase 0 forms resolved in ", "Формы фазы 0 собраны за ") + R1((Utility.GetCurrentRealTime() - t0) * 1000.0) + T(" ms", " мс"))
     ; Кеши сессии: цены и имена могли смениться вместе с модами и языком.
     VC_Forms = new Form[0]
     VC_Values = new Int[0]
@@ -1149,7 +1172,7 @@ Function GiveToolOnce()
     If !AM_ToolGiven
         PlayerRef().AddItem(AM_Tool, 1, true)
         AM_ToolGiven = true
-        Log("Предмет AutoMedic выдан игроку")
+        Log(T("AutoMedic item given to the player", "Предмет AutoMedic выдан игроку"))
     EndIf
 EndFunction
 
@@ -1386,25 +1409,25 @@ Function LoadSettings()
     AP_ITEMS_MODE = m.ApItemsMode
     COLA_RESERVE = m.ColaReserve
 
-    String text = "лечить " + OnOff(ENABLE_HEALTH, "hp") + OnOff(ENABLE_LIMBS, "limbs") + \
+    String text = T("treat ", "лечить ") + OnOff(ENABLE_HEALTH, "hp") + OnOff(ENABLE_LIMBS, "limbs") + \
         OnOff(LIMBS_IN_PA, "limbsPA") + \
         OnOff(m.EnableRads, "rads") + OnOff(m.EnableHunger, "hunger") + \
         OnOff(m.EnableThirst, "thirst") + OnOff(ENABLE_DISEASE, "disease") + \
         OnOff(ENABLE_ADDICTION, "addiction") + \
         "| hp " + R0(HEAL_TRIGGER_PCT) + "->" + R0(HEAL_TARGET_PCT) + "%, stimpak " + \
-        OnOff(ALLOW_STIMPAK, "") + "резерв " + RESERVE_STIMPAKS + \
-        " | голод " + hunger + ", жажда " + thirst + ", до " + MAX_ITEMS_PER_NEED + \
-        " шт., риск <= " + MAX_DISEASE_RISK_PCT + "%, запас еды " + FOOD_RESERVE + \
-        " (облуч. " + OnOff(FOOD_RESERVE_RADS, "") + ")" + \
+        OnOff(ALLOW_STIMPAK, "") + T("reserve ", "резерв ") + RESERVE_STIMPAKS + \
+        T(" | hunger ", " | голод ") + hunger + T(", thirst ", ", жажда ") + thirst + T(", up to ", ", до ") + MAX_ITEMS_PER_NEED + \
+        T(" items, risk <= ", " шт., риск <= ") + MAX_DISEASE_RISK_PCT + T("%, food reserve ", "%, запас еды ") + FOOD_RESERVE + \
+        T(" (irradiated ", " (облуч. ") + OnOff(FOOD_RESERVE_RADS, "") + ")" + \
         " | rads " + m.RadTriggerPct + "->" + m.RadTargetPct + "%, radaway " + \
-        OnOff(ALLOW_RADAWAY, "") + "резерв " + RESERVE_RADAWAY + ", набор <= " + \
-        R0(MAX_INGESTED_RADS) + ", без вывода " + OnOff(RAD_CAP_WITHOUT_CURE, "cap") + \
-        "| цена <= " + R0(MAX_ITEM_VALUE) + ", химия " + OnOff(USE_CHEMS, "") + \
-        "алкоголь " + OnOff(USE_ALCOHOL, "") + "ОД-напитки " + ApModeName(AP_ITEMS_MODE) + \
-        " при ОД < " + R0(AP_TRIGGER_PCT) + \
-        "% (восполнять до 100%), запас колы " + COLA_RESERVE + " (лучшие по ОД), исключения " + OnOff(USE_EXCLUSIONS, "") + \
-        "(" + AM_Excluded.Length + ") | сводка " + NOTIFY_LEVEL + \
-        ", лог " + LOG_LEVEL + " -> " + LogTargetName() + ", план без приёма " + OnOff(DRY_RUN, "") +         " | авто " + OnOff(m.AutoMode, "") + "hp " + m.AutoHealTriggerPct + "->" + m.AutoHealTargetPct +         "%, rads " + m.AutoRadTriggerPct + "->" + m.AutoRadTargetPct + "%, бой " + OnOff(m.AutoInCombat, "") +         "прочее " + OnOff(m.AutoOther, "") + "опрос " + m.AutoPollSec + " с, повтор " + m.AutoRetrySec + " с"
+        OnOff(ALLOW_RADAWAY, "") + T("reserve ", "резерв ") + RESERVE_RADAWAY + T(", intake <= ", ", набор <= ") + \
+        R0(MAX_INGESTED_RADS) + T(", no cure ", ", без вывода ") + OnOff(RAD_CAP_WITHOUT_CURE, "cap") + \
+        T("| price <= ", "| цена <= ") + R0(MAX_ITEM_VALUE) + T(", chems ", ", химия ") + OnOff(USE_CHEMS, "") + \
+        T("alcohol ", "алкоголь ") + OnOff(USE_ALCOHOL, "") + T("AP drinks ", "ОД-напитки ") + ApModeName(AP_ITEMS_MODE) + \
+        T(" at AP < ", " при ОД < ") + R0(AP_TRIGGER_PCT) + \
+        T("% (refill to 100%), cola reserve ", "% (восполнять до 100%), запас колы ") + COLA_RESERVE + T(" (best by AP), exclusions ", " (лучшие по ОД), исключения ") + OnOff(USE_EXCLUSIONS, "") + \
+        "(" + AM_Excluded.Length + T(") | summary ", ") | сводка ") + NOTIFY_LEVEL + \
+        T(", log ", ", лог ") + LOG_LEVEL + " -> " + LogTargetName() + T(", plan only ", ", план без приёма ") + OnOff(DRY_RUN, "") +         T(" | auto ", " | авто ") + OnOff(m.AutoMode, "") + "hp " + m.AutoHealTriggerPct + "->" + m.AutoHealTargetPct +         "%, rads " + m.AutoRadTriggerPct + "->" + m.AutoRadTargetPct + T("%, combat ", "%, бой ") + OnOff(m.AutoInCombat, "") +         T("other ", "прочее ") + OnOff(m.AutoOther, "") + T("poll ", "опрос ") + m.AutoPollSec + T(" s, retry ", " с, повтор ") + m.AutoRetrySec + T(" s", " с")
     If text != AM_SettingsText
         AM_SettingsText = text
         LogAt(LOG_SUMMARY, "SETTINGS " + text)
@@ -1414,15 +1437,15 @@ EndFunction
 String Function LogTargetName()
     If LOG_TARGET == LOG_TO_FILE
         If L_Append
-            Return "файл (дописывание)"
+            Return T("file (append)", "файл (дописывание)")
         EndIf
-        Return "файл (перезапись)"
+        Return T("file (rewrite)", "файл (перезапись)")
     ElseIf LOG_TARGET == LOG_TO_PAPYRUS
         Return "Papyrus"
     ElseIf LOG_TARGET == LOG_TO_BOTH
-        Return "файл + Papyrus"
+        Return T("file + Papyrus", "файл + Papyrus")
     EndIf
-    Return "никуда"
+    Return T("nowhere", "никуда")
 EndFunction
 
 Int Function ClampInt(Int aiValue, Int aiMin, Int aiMax)
@@ -1464,7 +1487,7 @@ EndFunction
 Function McmGiveTool()
     PlayerRef().AddItem(AM_Tool, 1, false)
     AM_ToolGiven = true
-    Log("Предмет AutoMedic выдан из MCM")
+    Log(T("AutoMedic item given from MCM", "Предмет AutoMedic выдан из MCM"))
     FlushLog()
 EndFunction
 
@@ -1472,7 +1495,7 @@ EndFunction
 Function McmReloadExclusions()
     LoadExclusions()
     FlushLog()
-    Debug.Notification("AutoMedic: " + AM_Excluded.Length + " excluded / исключено")
+    Debug.Notification("AutoMedic: " + AM_Excluded.Length + T(" excluded", " исключено"))
 EndFunction
 
 ; =====================================================================
@@ -1498,10 +1521,10 @@ Event OnMenuOpenCloseEvent(String asMenuName, Bool abOpening)
     Bool inBed = KW_SleepFurniture != None && GardenOfEden3.CurrentFurnitureHasKeyword(player, KW_SleepFurniture)
     Bool atBed = KW_SleepFurniture != None && target != None && target.HasKeyword(KW_SleepFurniture)
     Bool bed = inBed || atBed
-    LogAt(LOG_TRACE, "[" + GardenOfEden2.GetCurrentDateAndTimeAsString() + "] меню сна/ожидания: кровать " + bed + \
-        " (занятая мебель " + inBed + ", активирован " + target + " " + atBed + ", сидит " + player.GetSitState() + ")")
+    LogAt(LOG_TRACE, "[" + GardenOfEden2.GetCurrentDateAndTimeAsString() + T("] sleep/wait menu: bed ", "] меню сна/ожидания: кровать ") + bed + \
+        T(" (furniture in use ", " (занятая мебель ") + inBed + T(", activated ", ", активирован ") + target + " " + atBed + T(", sitting ", ", сидит ") + player.GetSitState() + ")")
     If bed && AM_Settings.HerbalsBeforeSleep
-        TopUpHerbals("перед сном")
+        TopUpHerbals(T("before sleep", "перед сном"))
     Else
         FlushLog()
     EndIf
@@ -1510,7 +1533,7 @@ EndEvent
 ; Только для лога: приходит ли OnSit вообще (на кровать — не пришёл).
 Event Actor.OnSit(Actor akSender, ObjectReference akFurniture)
     Bool bed = akFurniture != None && KW_SleepFurniture != None && akFurniture.HasKeyword(KW_SleepFurniture)
-    LogAt(LOG_TRACE, "[" + GardenOfEden2.GetCurrentDateAndTimeAsString() + "] OnSit " + akFurniture + ", кровать " + bed)
+    LogAt(LOG_TRACE, "[" + GardenOfEden2.GetCurrentDateAndTimeAsString() + "] OnSit " + akFurniture + T(", bed ", ", кровать ") + bed)
 EndEvent
 
 ; HC_Manager узнаёт о съеденном тем же событием. Ловится и приём самим модом.
@@ -1527,7 +1550,7 @@ Event Actor.OnItemEquipped(Actor akSender, Form akBaseObject, ObjectReference ak
     If risk <= 0 || !AM_Settings.HerbalsAfterRisk
         Return
     EndIf
-    HB_Reason = "после " + p + " (риск " + risk + "%)"
+    HB_Reason = T("after ", "после ") + p + T(" (risk ", " (риск ") + risk + "%)"
     StartTimer(HERBAL_DELAY, TIMER_HERBAL)
 EndEvent
 
@@ -1553,7 +1576,7 @@ Function TopUpHerbals(String asWhy)
             If player.GetItemCount(HB_Items[i]) <= 0
                 missing = Join(missing, HerbalNames[i])
             ElseIf m.DryRun
-                took = Join(took, HerbalNames[i] + " (только план)")
+                took = Join(took, HerbalNames[i] + T(" (plan only)", " (только план)"))
             Else
                 player.EquipItem(HB_Items[i], false, true)
                 took = Join(took, HerbalNames[i])
@@ -1567,9 +1590,9 @@ Function TopUpHerbals(String asWhy)
         level = LOG_SUMMARY
     EndIf
     If took != "" || missing != ""
-        String line = "HERBALS " + asWhy + ": выпито [" + took + "]"
+        String line = "HERBALS " + asWhy + T(": taken [", ": выпито [") + took + "]"
         If missing != ""
-            line += ", нет в инвентаре [" + missing + "]"
+            line += T(", not in inventory [", ", нет в инвентаре [") + missing + "]"
         EndIf
         LogAt(level, "[" + GardenOfEden2.GetCurrentDateAndTimeAsString() + "] " + line)
         If took != "" && NOTIFY_LEVEL > 0
@@ -1620,18 +1643,18 @@ Function RadXPoll()
     If player.IsDead() || (ME_RadX != None && player.HasMagicEffect(ME_RadX))
         Return
     EndIf
-    String line = "RADX скорость " + R1(rate) + " rad/с " + R1(held) + " с (порог " + R1(m.RadXRatePerSec) + \
-        " rad/с " + m.RadXSeconds + " с), rads " + R0(rads)
+    String line = T("RADX rate ", "RADX скорость ") + R1(rate) + T(" rad/s ", " rad/с ") + R1(held) + T(" s (threshold ", " с (порог ") + R1(m.RadXRatePerSec) + \
+        T(" rad/s ", " rad/с ") + m.RadXSeconds + T(" s), rads ", " с), rads ") + R0(rads)
     Int have = player.GetItemCount(RX_Item)
     If have <= 0
-        LogAt(LOG_TRACE, "[" + GardenOfEden2.GetCurrentDateAndTimeAsString() + "] " + line + " — Рад-Х нет")
+        LogAt(LOG_TRACE, "[" + GardenOfEden2.GetCurrentDateAndTimeAsString() + "] " + line + T(" - no Rad-X", " — Рад-Х нет"))
         Return
     EndIf
     If m.DryRun
-        line += " — выпил бы Рад-Х (только план)"
+        line += T(" - would take Rad-X (plan only)", " — выпил бы Рад-Х (только план)")
     Else
         player.EquipItem(RX_Item, false, true)
-        line += " — выпит Рад-Х, осталось " + (have - 1)
+        line += T(" - Rad-X taken, left ", " — выпит Рад-Х, осталось ") + (have - 1)
         If NOTIFY_LEVEL > 0
             Debug.Notification("AutoMedic: Rad-X")
         EndIf
@@ -1658,7 +1681,7 @@ Event OnTimer(Int aiTimerID)
     AutoMedicSettings m = AM_Settings
     If !m.AutoMode
         StartTimer(AUTO_OFF_POLL, TIMER_AUTO)
-        AutoSkip("авторежим выкл.")
+        AutoSkip(T("automatic mode off", "авторежим выкл."))
         Return
     EndIf
     StartTimer(ClampInt(m.AutoPollSec, 1, 30) as Float, TIMER_AUTO)
@@ -1676,7 +1699,7 @@ Function AutoSkip(String asWhy)
     If asWhy != ""
         ; Сразу в файл: причина меняется редко, а отложенная строка при
         ; «застрявшей» причине не ушла бы в файл никогда.
-        LogAt(LOG_TRACE, "[" + GardenOfEden2.GetCurrentDateAndTimeAsString() + "] авто-опрос: пропуск — " + asWhy)
+        LogAt(LOG_TRACE, "[" + GardenOfEden2.GetCurrentDateAndTimeAsString() + T("] auto poll: skipped - ", "] авто-опрос: пропуск — ") + asWhy)
         FlushLog()
     EndIf
 EndFunction
@@ -1689,10 +1712,10 @@ Function AutoPoll(AutoMedicSettings m)
     ; BusyAlive, а не AM_Busy: брошенный цикл (флаг остался в сейве) иначе
     ; навсегда глушил авторежим — снимал его только ручной приём (TryBusy).
     If BusyAlive()
-        AutoSkip("идёт цикл")
+        AutoSkip(T("a cycle is running", "идёт цикл"))
         Return
     ElseIf m.DryRun
-        AutoSkip("план без приёма")
+        AutoSkip(T("plan only", "план без приёма"))
         Return
     ElseIf Utility.IsInMenuMode()
         ; Без AutoSkip: каждое открытие Pip-Boy — две строки и две перезаписи лога.
@@ -1709,15 +1732,15 @@ Function AutoPoll(AutoMedicSettings m)
     EndIf
     Actor player = PlayerRef()
     If player.IsDead()
-        AutoSkip("мёртв")
+        AutoSkip(T("dead", "мёртв"))
         Return
     ElseIf player.IsBleedingOut()
-        AutoSkip("истекает кровью")
+        AutoSkip(T("bleeding out", "истекает кровью"))
         Return
     EndIf
     Bool combat = player.IsInCombat()
     If combat && !m.AutoInCombat
-        AutoSkip("бой (авто в бою выкл.)")
+        AutoSkip(T("combat (auto in combat off)", "бой (авто в бою выкл.)"))
         Return
     EndIf
     ; Сцена — ради диалога: не есть посреди разговора. Но сцена с игроком
@@ -1729,7 +1752,7 @@ Function AutoPoll(AutoMedicSettings m)
             AU_SceneSince = now
         EndIf
         If !combat && now - AU_SceneSince < AUTO_SCENE_WAIT
-            AutoSkip("в сцене")
+            AutoSkip(T("in a scene", "в сцене"))
             Return
         EndIf
     Else
@@ -1806,11 +1829,11 @@ Function AutoPoll(AutoMedicSettings m)
     ; прошла): появилось средство — не ждать проверки болезней раз в 30 с.
     Bool gotNew = false
     If why == "" && NewItems()
-        why = "новое: " + AU_NewWhat
+        why = T("new: ", "новое: ") + AU_NewWhat
         gotNew = true
     EndIf
     If why == ""
-        AutoSkip("пороги не достигнуты")
+        AutoSkip(T("thresholds not reached", "пороги не достигнуты"))
         Return
     EndIf
     ; Прошлый авто-цикл ничего не принял — ждём AutoRetrySec, если не стало хуже.
@@ -1821,13 +1844,13 @@ Function AutoPoll(AutoMedicSettings m)
             worse = worse || hunger > AU_IdleHunger || thirst > AU_IdleThirst
         EndIf
         If worse
-            why += " (хуже)"
+            why += T(" (worse)", " (хуже)")
         ElseIf gotNew
             ; уже в why
         ElseIf NewItems()
-            why += " (новое: " + AU_NewWhat + ")"
+            why += T(" (new: ", " (новое: ") + AU_NewWhat + ")"
         Else
-            AutoSkip("пауза повтора после пустого цикла")
+            AutoSkip(T("retry pause after an empty cycle", "пауза повтора после пустого цикла"))
             Return
         EndIf
     EndIf
@@ -1838,12 +1861,12 @@ Function AutoPoll(AutoMedicSettings m)
     Int mode = MODE_AUTO
     If combat
         mode = MODE_COMBAT
-        args[0] = "auto, бой: " + why
+        args[0] = T("auto, combat: ", "auto, бой: ") + why
     Else
         args[0] = "auto: " + why
     EndIf
     If AU_SceneSince > 0.0
-        args[0] = args[0] as String + " (в сцене " + R0(now - AU_SceneSince) + " с)"
+        args[0] = args[0] as String + T(" (in a scene ", " (в сцене ") + R0(now - AU_SceneSince) + T(" s)", " с)")
     EndIf
     args[1] = false
     args[2] = mode
@@ -1887,18 +1910,18 @@ Function ApplyAutoMode(Bool abCombat)
     Else
         RAD_TRIGGER_PCT = RAD_PCT_NEVER
     EndIf
-    String rest = "прочее+"
+    String rest = T("other+", "прочее+")
     If !m.AutoOther
         HUNGER_TRIGGER = STAGE_NEVER
         THIRST_TRIGGER = STAGE_NEVER
         ENABLE_LIMBS = false
         ENABLE_DISEASE = false
         ENABLE_ADDICTION = false
-        rest = "прочее-"
+        rest = T("other-", "прочее-")
     EndIf
-    String mode = "авто"
+    String mode = T("auto", "авто")
     If abCombat
-        mode = "авто в бою"
+        mode = T("auto in combat", "авто в бою")
     EndIf
     AU_Text = mode + ": hp " + R0(HEAL_TRIGGER_PCT) + "->" + R0(HEAL_TARGET_PCT) + "%, " + rads + ", " + rest
 EndFunction
@@ -1925,7 +1948,7 @@ Function AutoFinish(Bool abTook)
     AU_IdleCombat = AU_Mode == MODE_COMBAT
     AU_IdleBits = AU_PendingBits
     If N_Uses != 0
-        LogAt(LOG_SUMMARY, "  AUTO   принять нечего - повтор через " + retry + " с или раньше, если станет хуже")
+        LogAt(LOG_SUMMARY, T("  AUTO   nothing to take - retry in ", "  AUTO   принять нечего - повтор через ") + retry + T(" s or sooner if things get worse", " с или раньше, если станет хуже"))
     EndIf
 EndFunction
 
@@ -2030,8 +2053,8 @@ Function RecordIdle(Float afNow)
             EndIf
             If have > 0 && AU_IdleCnt[b] <= 0
                 AU_ListsOK = false
-                LogAt(LOG_SUMMARY, "  AUTO   ВНИМАНИЕ: GetItemCount(список " + BitName(b) + ") = " + AU_IdleCnt[b] + \
-                    ", а кандидатов " + have + " — счёт по спискам выключен до загрузки")
+                LogAt(LOG_SUMMARY, T("  AUTO   WARNING: GetItemCount(list ", "  AUTO   ВНИМАНИЕ: GetItemCount(список ") + BitName(b) + ") = " + AU_IdleCnt[b] + \
+                    T(", but candidates ", ", а кандидатов ") + have + T(" - list counting is off until the next load", " — счёт по спискам выключен до загрузки"))
                 Return
             EndIf
         EndIf
@@ -2039,7 +2062,7 @@ Function RecordIdle(Float afNow)
         mask *= 2
     EndWhile
     AU_IdleValid = true
-    LogAt(LOG_DETAILED, "  AUTO   жду новых средств (штук в инвентаре): " + text)
+    LogAt(LOG_DETAILED, T("  AUTO   waiting for new supplies (count in inventory): ", "  AUTO   жду новых средств (штук в инвентаре): ") + text)
 EndFunction
 
 ; Прибавились ли средства хоть под одну незакрытую нужду -> AU_NewWhat.
@@ -2105,13 +2128,13 @@ Function LoadExclusions()
     AM_Excluded = new Form[0]
     String a = ReadExclusionFile("exclusions-default.json")
     String b = ReadExclusionFile("exclusions-user.json")
-    Log("Исключения: " + AM_Excluded.Length + " форм (default: " + a + "; user: " + b + ")")
+    Log(T("Exclusions: ", "Исключения: ") + AM_Excluded.Length + T(" forms (default: ", " форм (default: ") + a + "; user: " + b + ")")
 EndFunction
 
 ; Добавляет формы файла в AM_Excluded; возвращает сводку для лога.
 String Function ReadExclusionFile(String asName)
     If !GardenOfEden2.DoesFileExist(asName, MOD_DATA_PATH)
-        Return "нет файла"
+        Return T("no file", "нет файла")
     EndIf
     String[] lines = GardenOfEden2.GetLinesFromFile(asName, MOD_DATA_PATH)
     Int added = 0
@@ -2131,7 +2154,7 @@ String Function ReadExclusionFile(String asName)
             EndIf
             If id <= 0 || plugin == ""
                 broken += 1
-                Log("  исключения " + asName + ": не разобрана строка " + (i + 1) + ": " + token)
+                Log(T("  exclusions ", "  исключения ") + asName + T(": cannot parse line ", ": не разобрана строка ") + (i + 1) + ": " + token)
             Else
                 Form f = Game.GetFormFromFile(id, plugin)
                 If f == None
@@ -2142,14 +2165,14 @@ String Function ReadExclusionFile(String asName)
                         added += 1
                     Else
                         broken += 1
-                        Log("  исключения: больше 128 форм, " + token + " пропущен")
+                        Log(T("  exclusions: more than 128 forms, ", "  исключения: больше 128 форм, ") + token + T(" skipped", " пропущен"))
                     EndIf
                 EndIf
             EndIf
         EndIf
         i += 1
     EndWhile
-    Return lines.Length + " строк, добавлено " + added + ", нет плагина " + missing + ", ошибок " + broken
+    Return lines.Length + T(" lines, added ", " строк, добавлено ") + added + T(", plugin missing ", ", нет плагина ") + missing + T(", errors ", ", ошибок ") + broken
 EndFunction
 
 ; Заменить ВСЕ вхождения asWhat. Документация ReplaceStr не говорит, все ли
@@ -2176,12 +2199,12 @@ Bool Function TryBusy(Bool abLoud = true)
     Float now = Utility.GetCurrentRealTime()
     If BusyAlive()
         If abLoud
-            Debug.Notification("AutoMedic: предыдущий цикл ещё не закончен")
+            Debug.Notification(T("AutoMedic: the previous cycle is still running", "AutoMedic: предыдущий цикл ещё не закончен"))
         EndIf
         Return false
     EndIf
     If AM_Busy
-        Log("  (предыдущий цикл брошен " + R0(now - AM_BusyStart) + " с назад — занимаю)")
+        Log(T("  (previous cycle abandoned ", "  (предыдущий цикл брошен ") + R0(now - AM_BusyStart) + T(" s ago - taking over)", " с назад — занимаю)"))
     EndIf
     AM_Busy = true
     AM_BusyStart = now
@@ -2235,8 +2258,8 @@ Function RunCycle(String asTrigger, Bool abDryRun, Int aiMode)
         AM_Cycle -= 1
         AU_LastEnd = Utility.GetCurrentRealTime()
         AM_Busy = false
-        LogAt(LOG_SUMMARY, "[" + startStamp + "] проверка пропущена (" + asTrigger + "): нужды те же, новых средств нет, " + \
-            Ms(tStart, Utility.GetCurrentRealTime()) + " (эффекты " + Ms(t2, t3) + ")")
+        LogAt(LOG_SUMMARY, "[" + startStamp + T("] check skipped (", "] проверка пропущена (") + asTrigger + T("): same needs, no new supplies, ", "): нужды те же, новых средств нет, ") + \
+            Ms(tStart, Utility.GetCurrentRealTime()) + T(" (effects ", " (эффекты ") + Ms(t2, t3) + ")")
         FlushLogThrottled()
         Return
     EndIf
@@ -2250,9 +2273,9 @@ Function RunCycle(String asTrigger, Bool abDryRun, Int aiMode)
             AM_Busy = false
             Float tEnd = Utility.GetCurrentRealTime()
             LogAt(LOG_SUMMARY, "[" + startStamp + " -> " + GardenOfEden2.GetCurrentDateAndTimeAsString() + \
-                "] пустой авто-цикл (" + asTrigger + "): " + Ms(tStart, tEnd) + " = настройки " + \
-                Ms(tStart, tSettings) + ", AV " + Ms(t0, t1) + ", перки " + Ms(t1, t2) + PerkCacheNote() + \
-                ", эффекты " + Ms(t2, t3) + " (" + S_EffectsTotal + "), нужды " + Ms(t3, tEnd))
+                T("] empty auto cycle (", "] пустой авто-цикл (") + asTrigger + "): " + Ms(tStart, tEnd) + T(" = settings ", " = настройки ") + \
+                Ms(tStart, tSettings) + ", AV " + Ms(t0, t1) + T(", perks ", ", перки ") + Ms(t1, t2) + PerkCacheNote() + \
+                T(", effects ", ", эффекты ") + Ms(t2, t3) + " (" + S_EffectsTotal + T("), needs ", "), нужды ") + Ms(t3, tEnd))
             FlushLogThrottled()
             Return
         EndIf
@@ -2277,20 +2300,20 @@ Function RunCycle(String asTrigger, Bool abDryRun, Int aiMode)
     EndIf
     Float t8 = Utility.GetCurrentRealTime()
     WriteOutcome(player)
-    LogAt(LOG_TRACE, "  TIME   AV " + Ms(t0, t1) + ", перки " + Ms(t1, t2) + PerkCacheNote() + \
-        ", GetActiveEffects " + Ms(t2, t3) + ", инвентарь " + Ms(t3, t4) + " (" + C_Total + \
-        " ALCH, " + PerItem(t3, t4, C_Total) + " мс/шт), план " + Ms(t4, t5) + \
-        " | ЦИКЛ " + Ms(t0, t5) + " | сверка статуса " + Ms(t5, t6) + ", отчёт " + Ms(t6, t7) + \
-        " | исполнение " + Ms(t7, t8))
+    LogAt(LOG_TRACE, "  TIME   AV " + Ms(t0, t1) + T(", perks ", ", перки ") + Ms(t1, t2) + PerkCacheNote() + \
+        ", GetActiveEffects " + Ms(t2, t3) + T(", inventory ", ", инвентарь ") + Ms(t3, t4) + " (" + C_Total + \
+        " ALCH, " + PerItem(t3, t4, C_Total) + T(" ms/item), plan ", " мс/шт), план ") + Ms(t4, t5) + \
+        T(" | CYCLE ", " | ЦИКЛ ") + Ms(t0, t5) + T(" | status check ", " | сверка статуса ") + Ms(t5, t6) + T(", report ", ", отчёт ") + Ms(t6, t7) + \
+        T(" | execution ", " | исполнение ") + Ms(t7, t8))
     If AU_Mode != MODE_ITEM
         AutoFinish(SpentText(false) != "")
     EndIf
     LogAt(LOG_SUMMARY, "  END    [" + startStamp + " -> " + GardenOfEden2.GetCurrentDateAndTimeAsString() + \
-        "] " + Ms(tStart, Utility.GetCurrentRealTime()) + " = настройки " + Ms(tStart, tSettings) + \
-        ", AV " + Ms(t0, t1) + ", перки " + Ms(t1, t2) + PerkCacheNote() + ", эффекты " + Ms(t2, t3) + \
-        ", инвентарь " + Ms(t3, t4) + " (" + C_Total + " ALCH, " + C_Path + " список " + Ms(0.0, C_ListSec) + ", кандидатов " + K_Forms.Length + \
-        "), план " + Ms(t4, t5) + \
-        ", отчёт " + Ms(t6, t7) + ", приём " + Ms(t7, t8))
+        "] " + Ms(tStart, Utility.GetCurrentRealTime()) + T(" = settings ", " = настройки ") + Ms(tStart, tSettings) + \
+        ", AV " + Ms(t0, t1) + T(", perks ", ", перки ") + Ms(t1, t2) + PerkCacheNote() + T(", effects ", ", эффекты ") + Ms(t2, t3) + \
+        T(", inventory ", ", инвентарь ") + Ms(t3, t4) + " (" + C_Total + " ALCH, " + C_Path + T(" list ", " список ") + Ms(0.0, C_ListSec) + T(", candidates ", ", кандидатов ") + K_Forms.Length + \
+        T("), plan ", "), план ") + Ms(t4, t5) + \
+        T(", report ", ", отчёт ") + Ms(t6, t7) + T(", taking ", ", приём ") + Ms(t7, t8))
     Notify()
     AM_Busy = false
     FlushLog()
@@ -2300,7 +2323,7 @@ Function RunCycle(String asTrigger, Bool abDryRun, Int aiMode)
 EndFunction
 
 String Function Ms(Float afFrom, Float afTo)
-    Return R0((afTo - afFrom) * 1000.0) + " мс"
+    Return R0((afTo - afFrom) * 1000.0) + T(" ms", " мс")
 EndFunction
 
 String Function PerItem(Float afFrom, Float afTo, Int aiCount)
@@ -2312,7 +2335,7 @@ EndFunction
 
 String Function PerkCacheNote()
     If S_PerksCached
-        Return " (кеш)"
+        Return T(" (cached)", " (кеш)")
     EndIf
     Return ""
 EndFunction
@@ -2476,7 +2499,7 @@ Function ReadActiveEffects(Actor akPlayer)
     EndIf
     If effects == None
         S_EffectsTotal = 0
-        LogAt(LOG_TRACE, "  EFFECTS GetActiveEffects вернул None")
+        LogAt(LOG_TRACE, T("  EFFECTS GetActiveEffects returned None", "  EFFECTS GetActiveEffects вернул None"))
         Return
     EndIf
     S_EffectsTotal = effects.Length
@@ -2574,8 +2597,8 @@ Function ReadActiveEffects(Actor akPlayer)
         i += 1
     EndWhile
     HealVariants(hItem, hBase, hElapsed, hMag, hRest)
-    LogAt(LOG_TRACE, "  EFFECTS всего " + S_EffectsTotal + ", показано " + shown + \
-        " (временные и наши роли)")
+    LogAt(LOG_TRACE, T("  EFFECTS total ", "  EFFECTS всего ") + S_EffectsTotal + T(", shown ", ", показано ") + shown + \
+        T(" (timed and our roles)", " (временные и наши роли)"))
 EndFunction
 
 ; Лечение «в полёте» без двойного счёта. У предмета с вариантом по перку
@@ -2616,7 +2639,7 @@ Function HealVariants(Form[] akItem, MagicEffect[] akBase, Float[] afElapsed, Fl
         j += 1
     EndWhile
     If dropped > 0.0
-        LogAt(LOG_TRACE, "  EFFECTS вариант по перку не в счёт: -" + R1(dropped) + " ОЗ «в полёте»")
+        LogAt(LOG_TRACE, T("  EFFECTS perk variant not counted: -", "  EFFECTS вариант по перку не в счёт: -") + R1(dropped) + T(" HP in flight", " ОЗ «в полёте»"))
     EndIf
 EndFunction
 
@@ -2654,9 +2677,9 @@ Function VerifyStatus(Actor akPlayer)
         i += 1
     EndWhile
     If diseases == S_Diseases && immuno == S_Immuno && radx == S_RadX && herbals == S_Herbals
-        S_StatusCheck = "совпало"
+        S_StatusCheck = T("match", "совпало")
     Else
-        S_StatusCheck = "РАСХОЖДЕНИЕ: HasMagicEffect дают disease [" + diseases + \
+        S_StatusCheck = T("MISMATCH: HasMagicEffect gives disease [", "РАСХОЖДЕНИЕ: HasMagicEffect дают disease [") + diseases + \
             "] immuno " + immuno + " radx " + radx + " herbals [" + herbals + "]"
     EndIf
 EndFunction
@@ -2808,11 +2831,11 @@ EndFunction
 ; Можно ли сейчас тратить ОД-напитки (для цикла; причина запрета -> C_APWhy).
 Bool Function ApDrinksAllowed()
     Float pct = S_APPct * 100.0
-    C_APWhy = "ОД " + R0(pct) + "% не ниже " + R0(AP_TRIGGER_PCT) + "%"
+    C_APWhy = T("AP ", "ОД ") + R0(pct) + T("% not below ", "% не ниже ") + R0(AP_TRIGGER_PCT) + "%"
     If AP_ITEMS_MODE == 0
-        C_APWhy = "режим «никогда»"
+        C_APWhy = T("mode 'never'", "режим «никогда»")
     ElseIf AP_ITEMS_MODE == 1 && !S_InCombat
-        C_APWhy = "не в бою (режим «только в бою»)"
+        C_APWhy = T("not in combat (mode 'in combat only')", "не в бою (режим «только в бою»)")
     EndIf
     Return ApDrinksAllowedFor(AP_ITEMS_MODE, AP_TRIGGER_PCT, S_InCombat, pct)
 EndFunction
@@ -2874,7 +2897,7 @@ Function CollectCandidates(Actor akPlayer, Int aiForceUses)
     ; Запасной путь (F4SE GetInventoryItems не ответил): по ячейкам GOEPE.
     Int[] slots = GardenOfEden3.GetItemIndexesByFormType(akPlayer, "ALCH")
     If slots == None
-        LogAt(LOG_DETAILED, "  CANDS  GetItemIndexesByFormType вернул None")
+        LogAt(LOG_DETAILED, T("  CANDS  GetItemIndexesByFormType returned None", "  CANDS  GetItemIndexesByFormType вернул None"))
         Return
     EndIf
     C_Total = slots.Length
@@ -2901,7 +2924,7 @@ Function CollectCandidates(Actor akPlayer, Int aiForceUses)
                 ElseIf why == "" && K_Rows.Length < 128
                     Int value = CachedValue(data.Item)
                     If MAX_ITEM_VALUE > 0.0 && value > MAX_ITEM_VALUE
-                        why = "дороже " + R0(MAX_ITEM_VALUE) + "c"
+                        why = T("pricier than ", "дороже ") + R0(MAX_ITEM_VALUE) + "c"
                     Else
                         K_Forms.Add(data.Item)
                         K_Rows.Add(row)
@@ -2940,7 +2963,7 @@ Bool Function CollectFromForms(Actor akPlayer, Int aiWanted)
     Form[] forms = akPlayer.GetInventoryItems()
     C_ListSec = Utility.GetCurrentRealTime() - t
     If forms == None
-        LogAt(LOG_DETAILED, "  CANDS  GetInventoryItems вернул None - запасной путь через GOEPE")
+        LogAt(LOG_DETAILED, T("  CANDS  GetInventoryItems returned None - fallback through GOEPE", "  CANDS  GetInventoryItems вернул None - запасной путь через GOEPE"))
         Return false
     EndIf
     Int i = 0
@@ -2960,7 +2983,7 @@ Bool Function CollectFromForms(Actor akPlayer, Int aiWanted)
                 ElseIf why == "" && K_Rows.Length < 128
                     Int value = CachedValue(data.Item)
                     If MAX_ITEM_VALUE > 0.0 && value > MAX_ITEM_VALUE
-                        why = "дороже " + R0(MAX_ITEM_VALUE) + "c"
+                        why = T("pricier than ", "дороже ") + R0(MAX_ITEM_VALUE) + "c"
                     Else
                         Int count = akPlayer.GetItemCount(item)
                         If count > 0
@@ -3043,22 +3066,22 @@ EndFunction
 String Function ExcludeReason(AutoMedicTables:ItemData akData)
     Int flags = akData.Flags
     If Has(flags, TF_BLACKLISTED)
-        Return "чёрный список"
+        Return T("blacklist", "чёрный список")
     ElseIf USE_EXCLUSIONS && AM_Excluded.Find(akData.Item) >= 0
-        Return "файл исключений"
+        Return T("exclusion file", "файл исключений")
     ElseIf Has(flags, TF_CAT_SYRINGER)
-        Return "шприцемёт"
+        Return T("syringer", "шприцемёт")
     ; Антибиотики — не стимпак, хотя UFO4P вешает на них ObjectTypeStimpak.
     ElseIf !ALLOW_STIMPAK && Has(flags, TF_CAT_STIMPAK) && !Has(flags, TF_CURES_DISEASE)
-        Return "стимпаки выключены"
+        Return T("stimpaks off", "стимпаки выключены")
     ElseIf !ALLOW_RADAWAY && akData.MedicRadMag > 0.0 && akData.MedicRadDur > 0.0
-        Return "антирадин выключен"
+        Return T("RadAway off", "антирадин выключен")
     ElseIf !USE_CHEMS && Has(flags, TF_ADDICTIVE)
-        Return "аддиктивная химия"
+        Return T("addictive chem", "аддиктивная химия")
     ElseIf !USE_ALCOHOL && Has(flags, TF_CAT_ALCOHOL)
-        Return "алкоголь"
+        Return T("alcohol", "алкоголь")
     ElseIf akData.DiseaseRiskPct > MAX_DISEASE_RISK_PCT
-        Return "риск болезни " + akData.DiseaseRiskPct + "%"
+        Return T("disease risk ", "риск болезни ") + akData.DiseaseRiskPct + "%"
     EndIf
     Return ""
 EndFunction
@@ -3422,8 +3445,8 @@ Function Plan()
     P_ReserveHit = false
     P_RadsUnprofitable = false
     If C_APLocked > 0
-        P_Notes = Join(P_Notes, "ОД-напитки (> " + R0(C_APLock) + " ОД) не трогаю: " + C_APWhy + \
-            " (" + C_APLocked + " видов)")
+        P_Notes = Join(P_Notes, T("AP drinks (> ", "ОД-напитки (> ") + R0(C_APLock) + T(" AP) left alone: ", " ОД) не трогаю: ") + C_APWhy + \
+            " (" + C_APLocked + T(" kinds)", " видов)"))
     EndIf
 
     PlanRads("A")
@@ -3658,11 +3681,11 @@ Int Function BestFor(Int aiNeed, Float afRem)
         EndIf
         String verdict = ""
         If rejected
-            verdict = "  -> НЕ БЕРУ: балл ниже " + R1(minScore)
+            verdict = T("  -> NOT TAKEN: score below ", "  -> НЕ БЕРУ: балл ниже ") + R1(minScore)
         EndIf
         P_Trace = P_Trace + "\n         PICK   " + NeedName(aiNeed) + " rem " + R0(afRem) + ": " + \
             CandName(best) + " gain " + R0(Gain(best, aiNeed, afRem)) + " / cost " + R1(CostOf(best)) + \
-            " = " + R1(bestScore) + "  (из " + G_Considered + ", второй: " + second + ")" + verdict
+            " = " + R1(bestScore) + T("  (of ", "  (из ") + G_Considered + T(", second: ", ", второй: ") + second + ")" + verdict
     EndIf
     If rejected
         P_RadsUnprofitable = true
@@ -3693,8 +3716,8 @@ Function PlanRads(String asStage)
         Return
     EndIf
     If S_AntiradActive
-        P_Notes = Join(P_Notes, "rads: антирад уже действует, в полёте -" + R0(S_InRadOut) + \
-            " — добираю только недостающее (A7: вторая доза ускоряет вывод)")
+        P_Notes = Join(P_Notes, T("rads: RadAway already working, in flight -", "rads: антирад уже действует, в полёте -") + R0(S_InRadOut) + \
+            T(" - adding only the rest (A7: a second dose speeds up removal)", " — добираю только недостающее (A7: вторая доза ускоряет вывод)"))
     EndIf
     While rem > RAD_TOLERANCE
         Int k = BestFor(NEED_RADS, rem)
@@ -3712,7 +3735,7 @@ Function PlanLimbs()
     EndIf
     ; Стимпак уже капает — он долечит и конечности; второй сожжёт пачку (M6).
     If S_InHealPct > 0.0
-        P_Notes = Join(P_Notes, "limbs: стимпак уже действует, второй не нужен")
+        P_Notes = Join(P_Notes, T("limbs: a stimpak is already working, no second one needed", "limbs: стимпак уже действует, второй не нужен"))
         Return
     EndIf
     Int best = -1
@@ -3801,7 +3824,7 @@ Int Function BestForAP(Float afRem)
     EndWhile
     If best >= 0 && LOG_LEVEL >= LOG_TRACE
         P_Trace = P_Trace + "\n         PICK   ap rem " + R0(afRem) + ": " + CandName(best) + " +" + \
-            R0(K_AP[best]) + " ОД, cost " + R1(CostOf(best)) + " = " + R1(bestScore * 100.0) + " ОД на 100c"
+            R0(K_AP[best]) + T(" AP, cost ", " ОД, cost ") + R1(CostOf(best)) + " = " + R1(bestScore * 100.0) + T(" AP per 100c", " ОД на 100c")
     EndIf
     Return best
 EndFunction
@@ -3931,13 +3954,13 @@ Function PlanHealth(String asStage)
             EndIf
             i += 1
         EndWhile
-        String cls = "добран"
+        String cls = T("covered", "добран")
         If H_BestCls == 1
-            cls = "НЕДОБОР"
+            cls = T("SHORT", "НЕДОБОР")
         EndIf
         P_Trace = P_Trace + "\n         HEAL   " + asStage + " rem " + R0(rem) + ": " + picked + \
-            "  (" + cls + ", потери " + R1(H_BestW) + " ОЗ; из " + m + " видов, " + H_Nodes + \
-            " узлов, " + R0(ms) + " мс)"
+            "  (" + cls + T(", loss ", ", потери ") + R1(H_BestW) + T(" HP; of ", " ОЗ; из ") + m + T(" kinds, ", " видов, ") + H_Nodes + \
+            T(" nodes, ", " узлов, ") + R0(ms) + T(" ms)", " мс)")
     EndIf
     i = 0
     While i < m
@@ -3972,11 +3995,11 @@ EndFunction
 
 String Function ApModeName(Int aiMode)
     If aiMode == 0
-        Return "никогда"
+        Return T("never", "никогда")
     ElseIf aiMode == 2
-        Return "всегда"
+        Return T("always", "всегда")
     EndIf
-    Return "в бою"
+    Return T("in combat", "в бою")
 EndFunction
 
 ; Положительное x вверх до целого (Math.Ceiling — нативный вызов, а это
@@ -4146,7 +4169,7 @@ Function Trim()
         EndWhile
         If drop >= 0
             P_Trim = Join(P_Trim, CandName(P_K[drop]) + " x1 [" + NeedName(P_For[drop]) + \
-                "] (избыточен: нужды покрыты остальными, cost " + R1(dropCost) + ")")
+                T("] (redundant: needs covered by the rest, cost ", "] (избыточен: нужды покрыты остальными, cost ") + R1(dropCost) + ")")
             P_K.Remove(drop)
             P_For.Remove(drop)
             P_Gain.Remove(drop)
@@ -4230,7 +4253,7 @@ Function WriteReport(Actor akPlayer)
         R0(N_EffMaxAfter) + ")  rads=" + R0(N_Rads) + "  hunger=" + R1(N_Hunger) + \
         "  thirst=" + R1(N_Thirst) + "  limbs=" + N_Limbs + "  disease=" + N_Disease + \
         "  addiction=" + N_Addiction + "  ap=" + R0(N_APNeed) + " (100% = " + R0(S_APFull) + \
-        ", в полёте +" + R0(S_InAP) + ", напитки " + OnOff(N_APAllowed, "") + ")")
+        T(", in flight +", ", в полёте +") + R0(S_InAP) + T(", drinks ", ", напитки ") + OnOff(N_APAllowed, "") + ")")
 
     If LOG_LEVEL >= LOG_DETAILED
         WriteCandidates(akPlayer)
@@ -4241,12 +4264,12 @@ EndFunction
 
 Function WriteCandidates(Actor akPlayer)
     If N_Uses == 0
-        Log("  CANDS  нужд нет — инвентарь не читался")
+        Log(T("  CANDS  no needs - inventory not read", "  CANDS  нужд нет — инвентарь не читался"))
         Return
     EndIf
-    Log("  CANDS  ALCH в инвентаре " + C_Total + ": кандидатов " + K_Forms.Length + \
-        ", не нужны сейчас " + C_Idle + ", исключено " + C_Excluded + \
-        ", вне таблицы " + C_Unknown + " (вкл. сам AutoMedic)  |  hp " + C_HPCount + \
+    Log(T("  CANDS  ALCH in inventory ", "  CANDS  ALCH в инвентаре ") + C_Total + T(": candidates ", ": кандидатов ") + K_Forms.Length + \
+        T(", not needed now ", ", не нужны сейчас ") + C_Idle + T(", excluded ", ", исключено ") + C_Excluded + \
+        T(", not in table ", ", вне таблицы ") + C_Unknown + T(" (incl. AutoMedic itself)  |  hp ", " (вкл. сам AutoMedic)  |  hp ") + C_HPCount + \
         ", rads " + C_RadsCount + ", limbs " + C_LimbsCount + ", hunger " + C_HungerCount + \
         ", thirst " + C_ThirstCount + ", disease " + C_DiseaseCount + ", addict " + \
         C_AddictionCount + ", ap " + C_APCount)
@@ -4259,10 +4282,10 @@ Function WriteCandidates(Actor akPlayer)
             EndIf
             c += 1
         EndWhile
-        Log("         запас колы " + COLA_RESERVE + " (лучшие по ОД): " + kept)
+        Log(T("         cola reserve ", "         запас колы ") + COLA_RESERVE + T(" (best by AP): ", " (лучшие по ОД): ") + kept)
     EndIf
     If !C_HungerWillClose
-        Log("         M4: голод закрыть нечем — еда не подействует, в план не берётся")
+        Log(T("         M4: nothing to close hunger with - food will not work, not planned", "         M4: голод закрыть нечем — еда не подействует, в план не берётся"))
     EndIf
     If LOG_LEVEL < LOG_TRACE
         Return
@@ -4271,7 +4294,7 @@ Function WriteCandidates(Actor akPlayer)
     While k < K_Forms.Length
         String line = "         " + CandName(k) + " x" + K_Counts[k] + " (" + K_Values[k] + "c"
         If K_Avail[k] < K_Counts[k]
-            line += ", свободно " + K_Avail[k]
+            line += T(", free ", ", свободно ") + K_Avail[k]
         EndIf
         If K_Heal[k] > 0.0
             line += ", +" + R0(K_Heal[k]) + " HP"
@@ -4289,9 +4312,9 @@ Function WriteCandidates(Actor akPlayer)
             line += ", risk " + K_Risk[k] + "%"
         EndIf
         If K_Dead[k]
-            line += ", M4: не подействует"
+            line += T(", M4: will not work", ", M4: не подействует")
         ElseIf K_AfterFood[k]
-            line += ", после голода"
+            line += T(", after hunger", ", после голода")
         EndIf
         Log(line + ", cost " + R1(CostOf(k)) + ")")
         k += 1
@@ -4303,7 +4326,7 @@ Function WriteCandidates(Actor akPlayer)
             excluded = Join(excluded, SlotName(akPlayer, X_Forms[x], CheckedSlot(akPlayer, X_Forms[x], X_Slots[x])) + " (" + X_Why[x] + ")")
             x += 1
         EndWhile
-        Log("         исключены: " + excluded)
+        Log(T("         excluded: ", "         исключены: ") + excluded)
     EndIf
 EndFunction
 
@@ -4368,19 +4391,19 @@ EndFunction
 ; чтобы LoopPick видел пустые E_* этого цикла; исполнение вызовет её заново.
 String Function LoopNote(Int aiUse, Int aiCount)
     If aiCount <= 0
-        Return "нечем"
+        Return T("nothing to use", "нечем")
     EndIf
     InitExecution()
     Int k = LoopPick(aiUse)
     If k < 0
-        Return aiCount + " кандидатов, но ни один сейчас не проходит по лимиту радиации"
+        Return aiCount + T(" candidates, but none passes the radiation limit now", " кандидатов, но ни один сейчас не проходит по лимиту радиации")
     EndIf
-    Return aiCount + " кандидатов, первым пойдёт " + CandName(k) + " (" + K_Values[k] + \
-        "c, цена в цикле " + R1(LoopCost(k)) + ")"
+    Return aiCount + T(" candidates, first will be ", " кандидатов, первым пойдёт ") + CandName(k) + " (" + K_Values[k] + \
+        T("c, loop cost ", "c, цена в цикле ") + R1(LoopCost(k)) + ")"
 EndFunction
 
 Function WritePlan()
-    Log("  PLAN   (" + P_K.Length + " шт.; голод и жажда — циклы исполнения)" + P_Trace)
+    Log("  PLAN   (" + P_K.Length + T(" items; hunger and thirst - execution loops)", " шт.; голод и жажда — циклы исполнения)") + P_Trace)
     WritePlanNeed("rads  ", NEED_RADS, N_Rads > 0.0 || PlanLines(NEED_RADS) != "")
     WritePlanNeed("limbs ", NEED_LIMBS, N_Limbs > 0)
     WritePlanNeed("disease", NEED_DISEASE, N_Disease > 0)
@@ -4388,10 +4411,10 @@ Function WritePlan()
     WritePlanNeed("ap    ", NEED_AP, N_APNeed > 0.0 || PlanLines(NEED_AP) != "")
     WritePlanNeed("hp    ", NEED_HP, N_HP > 0.0 || PlanLines(NEED_HP) != "")
     If N_Hunger > 0.0
-        Log("         hunger <- цикл: " + LoopNote(USE_HUNGER, C_HungerCount))
+        Log(T("         hunger <- loop: ", "         hunger <- цикл: ") + LoopNote(USE_HUNGER, C_HungerCount))
     EndIf
     If N_Thirst > 0.0
-        Log("         thirst <- цикл: " + LoopNote(USE_THIRST, C_ThirstCount))
+        Log(T("         thirst <- loop: ", "         thirst <- цикл: ") + LoopNote(USE_THIRST, C_ThirstCount))
     EndIf
     If P_Notes != ""
         Log("         note: " + P_Notes)
@@ -4399,15 +4422,15 @@ Function WritePlan()
     If P_Trim != ""
         Log("  TRIM   dropped: " + P_Trim)
     Else
-        Log("  TRIM   ничего")
+        Log(T("  TRIM   nothing", "  TRIM   ничего"))
     EndIf
     Totals(-1)
     Float hpNeed = NeedHPGiven(T_RadOut, T_RadIn)
     Float radNeed = NeedRads(T_RadIn)
-    Log("  COVER  hp " + R0(Math.Min(T_Heal, hpNeed)) + "/" + R0(hpNeed) + " (потолок после плана " + \
-        R0(EffMax(T_RadOut, T_RadIn)) + ", лечение плана " + R0(T_Heal) + ")  rads " + \
-        R0(Math.Min(T_RadOut, radNeed)) + "/" + R0(radNeed) + " (вывод плана " + R0(T_RadOut) + \
-        ", съедено +" + R1(T_RadIn) + ")  ap " + R0(Math.Min(T_AP, N_APNeed)) + "/" + R0(N_APNeed))
+    Log("  COVER  hp " + R0(Math.Min(T_Heal, hpNeed)) + "/" + R0(hpNeed) + T(" (cap after plan ", " (потолок после плана ") + \
+        R0(EffMax(T_RadOut, T_RadIn)) + T(", plan healing ", ", лечение плана ") + R0(T_Heal) + ")  rads " + \
+        R0(Math.Min(T_RadOut, radNeed)) + "/" + R0(radNeed) + T(" (plan removal ", " (вывод плана ") + R0(T_RadOut) + \
+        T(", eaten +", ", съедено +") + R1(T_RadIn) + ")  ap " + R0(Math.Min(T_AP, N_APNeed)) + "/" + R0(N_APNeed))
     Log("  ORDER  " + OrderText())
 EndFunction
 
@@ -4421,12 +4444,12 @@ String Function OrderText()
         If phase == 3
             If N_Hunger > 0.0
                 step += 1
-                out = Join(out, step + ". голод (цикл)")
+                out = Join(out, step + T(". hunger (loop)", ". голод (цикл)"))
             EndIf
         ElseIf phase == 4
             If N_Thirst > 0.0
                 step += 1
-                out = Join(out, step + ". жажда (цикл)")
+                out = Join(out, step + T(". thirst (loop)", ". жажда (цикл)"))
             EndIf
         Else
             Int e = 0
@@ -4441,7 +4464,7 @@ String Function OrderText()
         phase += 1
     EndWhile
     If out == ""
-        Return "ничего"
+        Return T("nothing", "ничего")
     EndIf
     Return out
 EndFunction
@@ -4452,63 +4475,63 @@ String Function UnmetText()
     Totals(-1)
     Float hpLeft = HPShortfall(-1)
     If hpLeft > HPTolerance()
-        String why = "нечем лечить"
+        String why = T("nothing to heal with", "нечем лечить")
         If P_LimitHit
-            why = "лимит " + MAX_PLAN_ITEMS + " предметов"
+            why = T("limit ", "лимит ") + MAX_PLAN_ITEMS + T(" items", " предметов")
         ElseIf P_ReserveHit
-            why = "осталось только в запасе (еда " + FOOD_RESERVE + ", лучшая по ОД кола " + COLA_RESERVE + ")"
+            why = T("only reserve left (food ", "осталось только в запасе (еда ") + FOOD_RESERVE + T(", best AP cola ", ", лучшая по ОД кола ") + COLA_RESERVE + ")"
         ElseIf C_HPCount > 0
-            why = "лечения в инвентаре не хватило"
+            why = T("not enough healing in inventory", "лечения в инвентаре не хватило")
         EndIf
-        out = Join(out, "hp (" + R0(hpLeft) + " осталось): " + why)
+        out = Join(out, "hp (" + R0(hpLeft) + T(" left): ", " осталось): ") + why)
     EndIf
     If N_Limbs > 0 && S_InHealPct <= 0.0 && P_For.Find(NEED_LIMBS) < 0
-        String why = "нет стимпака"
+        String why = T("no stimpak", "нет стимпака")
         If !ALLOW_STIMPAK
-            why = "стимпаки выключены в MCM"
+            why = T("stimpaks off in MCM", "стимпаки выключены в MCM")
         ElseIf C_LimbsCount > 0
-            why = "стимпаки в резерве (" + RESERVE_STIMPAKS + ")"
+            why = T("stimpaks in reserve (", "стимпаки в резерве (") + RESERVE_STIMPAKS + ")"
         EndIf
         out = Join(out, "limbs (" + N_Limbs + "): " + why)
     EndIf
     Float radLeft = RadShortfall(-1)
     If radLeft > RAD_TOLERANCE
-        String why = "нет средств вывода радиации"
+        String why = T("no radiation cure", "нет средств вывода радиации")
         If P_LimitHit
-            why = "лимит " + MAX_PLAN_ITEMS + " предметов"
+            why = T("limit ", "лимит ") + MAX_PLAN_ITEMS + T(" items", " предметов")
         ElseIf P_RadsUnprofitable
-            why = "остальное невыгодно (балл ниже " + R1(MIN_SCORE_RADS) + ")"
+            why = T("the rest is not worth it (score below ", "остальное невыгодно (балл ниже ") + R1(MIN_SCORE_RADS) + ")"
         ElseIf P_ReserveHit && C_RadsCount > 0
-            why = "рад-еда осталась только в запасе (" + FOOD_RESERVE + " шт.)"
+            why = T("irradiated food only in reserve (", "рад-еда осталась только в запасе (") + FOOD_RESERVE + T(" items)", " шт.)")
         ElseIf C_RadsCount > 0
-            why = "средств вывода не хватило"
+            why = T("not enough radiation cure", "средств вывода не хватило")
         EndIf
-        out = Join(out, "rads (" + R0(radLeft) + " осталось): " + why)
+        out = Join(out, "rads (" + R0(radLeft) + T(" left): ", " осталось): ") + why)
     EndIf
     Float apLeft = APShortfall(-1)
     If apLeft > APTolerance()
-        String why = "нет напитков с ОД"
+        String why = T("no AP drinks", "нет напитков с ОД")
         If P_LimitHit
-            why = "лимит " + MAX_PLAN_ITEMS + " предметов"
+            why = T("limit ", "лимит ") + MAX_PLAN_ITEMS + T(" items", " предметов")
         ElseIf C_APCount > 0
-            why = "напитков с ОД не хватило"
+            why = T("not enough AP drinks", "напитков с ОД не хватило")
         ElseIf C_ColaKept > 0
-            why = "кола только в запасе (" + COLA_RESERVE + ")"
+            why = T("cola only in reserve (", "кола только в запасе (") + COLA_RESERVE + ")"
         EndIf
-        out = Join(out, "ap (" + R0(apLeft) + " осталось): " + why)
+        out = Join(out, "ap (" + R0(apLeft) + T(" left): ", " осталось): ") + why)
     EndIf
     ; При исполнении голод и жажду оценивают сами циклы (E_Unmet ниже).
     If E_DryRun && N_Hunger > 0.0 && C_HungerCount == 0
-        out = Join(out, "hunger: нет еды")
+        out = Join(out, T("hunger: no food", "hunger: нет еды"))
     EndIf
     If E_DryRun && N_Thirst > 0.0 && C_ThirstCount == 0
-        out = Join(out, "thirst: нет питья")
+        out = Join(out, T("thirst: nothing to drink", "thirst: нет питья"))
     EndIf
     If N_Disease > 0 && P_For.Find(NEED_DISEASE) < 0
-        out = Join(out, "disease: нет антибиотиков")
+        out = Join(out, T("disease: no antibiotics", "disease: нет антибиотиков"))
     EndIf
     If N_Addiction > 0 && P_For.Find(NEED_ADDICTION) < 0
-        out = Join(out, "addiction: нет средств от зависимости")
+        out = Join(out, T("addiction: no addiction cure", "addiction: нет средств от зависимости"))
     EndIf
     If !E_DryRun && E_Unmet != ""
         out = Join(out, E_Unmet)
@@ -4532,15 +4555,15 @@ Function Notify()
     If AU_Mode != MODE_ITEM
         ; Авто молчит, если ничего не принял: иначе «нечего принять» каждую минуту.
         If spent != ""
-            Debug.Notification("AutoMedic (авто): " + spent + " | " + AfterText())
+            Debug.Notification(T("AutoMedic (auto): ", "AutoMedic (авто): ") + spent + " | " + AfterText())
         EndIf
         Return
     EndIf
     If spent == "" && N_Uses == 0
-        Debug.Notification("AutoMedic: ничего не нужно")
+        Debug.Notification(T("AutoMedic: nothing needed", "AutoMedic: ничего не нужно"))
         Return
     ElseIf spent == ""
-        spent = "нечего принять"
+        spent = T("nothing to take", "нечего принять")
     EndIf
     Debug.Notification("AutoMedic: " + spent + " | " + AfterText())
 EndFunction
@@ -4564,19 +4587,19 @@ Function NotifyPlan()
     EndWhile
     String loops = ""
     If N_Hunger > 0.0
-        loops = Join(loops, "голод " + R0(S_Hunger))
+        loops = Join(loops, T("hunger ", "голод ") + R0(S_Hunger))
     EndIf
     If N_Thirst > 0.0
-        loops = Join(loops, "жажда " + R0(S_Thirst))
+        loops = Join(loops, T("thirst ", "жажда ") + R0(S_Thirst))
     EndIf
     String text = items
     If loops != ""
         text = Join(text, loops)
     EndIf
     If text == ""
-        text = "ничего не нужно"
+        text = T("nothing needed", "ничего не нужно")
     EndIf
-    Debug.Notification("AutoMedic [план]: " + text)
+    Debug.Notification(T("AutoMedic [plan]: ", "AutoMedic [план]: ") + text)
 EndFunction
 
 ; Принятое за цикл, по предмету: "-2 Tato, -1 Stimpak".
@@ -4592,14 +4615,14 @@ String Function SpentText(Bool abWithCaps)
         k += 1
     EndWhile
     If abWithCaps && out != ""
-        out += "  (" + caps + " крышек)"
+        out += "  (" + caps + T(" caps)", " крышек)")
     EndIf
     Return out
 EndFunction
 
 Function WriteOutcome(Actor akPlayer)
     If E_DryRun
-        LogAt(LOG_SUMMARY, "  SPENT  ничего (dry-run)")
+        LogAt(LOG_SUMMARY, T("  SPENT  nothing (dry-run)", "  SPENT  ничего (dry-run)"))
         LogAt(LOG_SUMMARY, "  UNMET  " + UnmetText())
         Return
     EndIf
@@ -4608,7 +4631,7 @@ Function WriteOutcome(Actor akPlayer)
         Log("  AFTER  " + AfterText())
         String spent = SpentText(true)
         If spent == ""
-            spent = "ничего"
+            spent = T("nothing", "ничего")
         EndIf
         Log("  SPENT  " + spent)
         Log("  UNMET  " + UnmetText())
@@ -4654,15 +4677,15 @@ String Function AfterText()
     Float effMax = A_MaxHP * (1.0 - A_Rads / RADS_MAX)
     String out = "HP " + R0(A_HP) + "/" + R0(effMax)
     If A_InHeal > 0.5
-        out += " (+" + R0(A_InHeal) + " в полёте)"
+        out += " (+" + R0(A_InHeal) + T(" in flight)", " в полёте)")
     EndIf
     out += ", Rads " + R0(A_Rads)
     If A_InRadOut > 0.5
-        out += " (-" + R0(A_InRadOut) + " в полёте)"
+        out += " (-" + R0(A_InRadOut) + T(" in flight)", " в полёте)")
     EndIf
     out += ", " + HungerName(A_Hunger) + ", " + ThirstName(A_Thirst)
     If A_Crippled > 0
-        out += ", покалечено: " + A_Crippled
+        out += T(", crippled: ", ", покалечено: ") + A_Crippled
     EndIf
     ; ОД — только когда они были нуждой: иначе лишний шум в сводке.
     If N_APNeed > 0.0
@@ -4729,7 +4752,7 @@ EndFunction
 Function Skip(Int e, String asWhy)
     Int k = P_K[e]
     SkipLine(CandName(k) + " [" + NeedName(P_For[e]) + "]: " + asWhy)
-    E_Unmet = Join(E_Unmet, NeedName(P_For[e]) + ": " + CandName(k) + " не принят — " + asWhy)
+    E_Unmet = Join(E_Unmet, NeedName(P_For[e]) + ": " + CandName(k) + T(" not taken - ", " не принят — ") + asWhy)
 EndFunction
 
 ; Строки плана фазы aiPhase (и нужды aiNeed, если не 0).
@@ -4749,19 +4772,19 @@ Bool Function ApplyEntry(Actor akPlayer, Int e)
     ; M4: еда, съеденная голодным, не даёт ничего — ни лечения, ни вывода
     ; радиации, ни излечения зависимости. Цикл голода мог не довести до Fed.
     If K_AfterFood[k] && akPlayer.GetValue(AV_Hunger) >= 0.5
-        Skip(e, "M4: голод не закрыт, еда не подействует")
+        Skip(e, T("M4: hunger not closed, food will not work", "M4: голод не закрыт, еда не подействует"))
         Return false
     EndIf
     If FOOD_RESERVE > 0 && K_InPool[k] && FoodPoolLeft() - 1 < FOOD_RESERVE
-        Skip(e, "запас еды: осталось " + FoodPoolLeft() + ", держим " + FOOD_RESERVE)
+        Skip(e, T("food reserve: left ", "запас еды: осталось ") + FoodPoolLeft() + T(", keeping ", ", держим ") + FOOD_RESERVE)
         Return false
     EndIf
     If K_ColaKeep[k] > 0 && FreeLeft(k) <= 0
-        Skip(e, "запас колы: " + K_ColaKeep[k] + " шт. не тратим")
+        Skip(e, T("cola reserve: ", "запас колы: ") + K_ColaKeep[k] + T(" items kept", " шт. не тратим"))
         Return false
     EndIf
     If !Consume(akPlayer, k)
-        Skip(e, "не применился (нет в инвентаре или EquipItem отказал)")
+        Skip(e, T("not applied (not in inventory or EquipItem refused)", "не применился (нет в инвентаре или EquipItem отказал)"))
         Return false
     EndIf
     String what = ""
@@ -4848,16 +4871,16 @@ Function RunLoop(Actor akPlayer, Int aiUse, ActorValue akAV, Int aiTrigger, Int 
     String why = ""
     While why == "" && Math.Floor(stage + 0.5) > aiTarget
         If taken >= MAX_ITEMS_PER_NEED
-            why = "лимит " + MAX_ITEMS_PER_NEED + " предметов"
+            why = T("limit ", "лимит ") + MAX_ITEMS_PER_NEED + T(" items", " предметов")
         ElseIf stalled >= MAX_STALLED
-            why = stalled + " штук подряд не сдвинули стадию — не насыщают"
+            why = stalled + T(" items in a row did not move the stage - they do not sate", " штук подряд не сдвинули стадию — не насыщают")
         Else
             Int k = LoopPick(aiUse)
             If k < 0
                 why = LoopEmptyReason(aiUse)
             ElseIf !Consume(akPlayer, k)
                 E_Bad[k] = true
-                SkipLine(CandName(k) + " [" + asLabel + "]: не применился")
+                SkipLine(CandName(k) + " [" + asLabel + T("]: not applied", "]: не применился"))
             Else
                 taken += 1
                 E_LoopRadIn += K_RadIn[k]
@@ -4869,7 +4892,7 @@ Function RunLoop(Actor akPlayer, Int aiUse, ActorValue akAV, Int aiTrigger, Int 
                     stalled += 1
                 Else
                     stalled = 0
-                    line += "  через " + Ms(t0, Utility.GetCurrentRealTime())
+                    line += T("  after ", "  через ") + Ms(t0, Utility.GetCurrentRealTime())
                 EndIf
                 UseLine(line)
                 stage = now
@@ -4958,14 +4981,14 @@ String Function LoopEmptyReason(Int aiUse)
     Int k = 0
     While k < K_Forms.Length
         If Has(K_Uses[k], aiUse)
-            Return "подходящее кончилось (съедено, лимит радиации или не применилось)"
+            Return T("suitable items ran out (eaten, radiation limit or not applied)", "подходящее кончилось (съедено, лимит радиации или не применилось)")
         EndIf
         k += 1
     EndWhile
     If aiUse == USE_HUNGER
-        Return "нет еды"
+        Return T("no food", "нет еды")
     EndIf
-    Return "нет питья"
+    Return T("nothing to drink", "нет питья")
 EndFunction
 
 ; Фаза 5: добор ОЗ. План считался до циклов, а с тех пор стимпак фазы 1 уже
@@ -4991,7 +5014,7 @@ Function ExecuteHealth(Actor akPlayer)
             Int k = P_K[e]
             If need <= tol
                 E_Done[e] = true
-                SkipLine(CandName(k) + " [hp]: уже не нужен (нужда " + R0(need) + " <= допуск " + R0(tol) + ")")
+                SkipLine(CandName(k) + T(" [hp]: no longer needed (need ", " [hp]: уже не нужен (нужда ") + R0(need) + T(" <= tolerance ", " <= допуск ") + R0(tol) + ")")
             ElseIf ApplyEntry(akPlayer, e)
                 need -= K_Heal[k]
             EndIf
@@ -5035,8 +5058,8 @@ Float Function RecheckHP(Actor akPlayer)
     If need < 0.0
         need = 0.0
     EndIf
-    LogAt(LOG_DETAILED, "  RECHECK hp " + R0(hp) + ", в полёте " + Signed(F_Heal) + ", максимум " + \
-        R0(maxHP) + " (был " + R0(S_MaxHP) + "), потолок " + R0(effMax) + " -> нужда " + R0(need) + " (план ждал " + R0(N_HP) + ")")
+    LogAt(LOG_DETAILED, "  RECHECK hp " + R0(hp) + T(", in flight ", ", в полёте ") + Signed(F_Heal) + T(", max ", ", максимум ") + \
+        R0(maxHP) + T(" (was ", " (был ") + R0(S_MaxHP) + T("), cap ", "), потолок ") + R0(effMax) + T(" -> need ", " -> нужда ") + R0(need) + T(" (plan expected ", " (план ждал ") + R0(N_HP) + ")")
     Return need
 EndFunction
 
@@ -5134,7 +5157,7 @@ Function WatchEffects(Actor akPlayer, String asStamp)
                     Log(asStamp + " +EFFECT " + EffectText(ae))
                 ElseIf left > W_Left[known] + 0.5
                     ; Тот же экземпляр, а остаток вырос — длительность обновили (A5).
-                    Log(asStamp + " ~EFFECT " + EffectText(ae) + " (было left=" + R1(W_Left[known]) + ")")
+                    Log(asStamp + " ~EFFECT " + EffectText(ae) + T(" (was left=", " (было left=") + R1(W_Left[known]) + ")")
                 EndIf
                 keys.Add(addr)
                 names.Add(ae.BaseEffect + " src=" + ae.MagicItem)
@@ -5166,7 +5189,7 @@ Function Watch(Int aiToken)
     Float hunger = S_Hunger
     Float thirst = S_Thirst
     Float ap = S_AP
-    Log("  WATCH  " + WATCH_SECONDS + " с: пишутся только изменения. Следующее нажатие прервёт.")
+    Log("  WATCH  " + WATCH_SECONDS + T(" s: only changes are written. The next press stops it.", " с: пишутся только изменения. Следующее нажатие прервёт."))
     Int tick = 0
     While tick < WATCH_SECONDS && aiToken == AM_WatchToken
         Utility.Wait(1.0)
@@ -5207,9 +5230,9 @@ Function Watch(Int aiToken)
         EndIf
     EndWhile
     If aiToken == AM_WatchToken
-        Log("  WATCH  конец")
+        Log(T("  WATCH  end", "  WATCH  конец"))
     Else
-        Log("  WATCH  прервано новым нажатием")
+        Log(T("  WATCH  interrupted by a new press", "  WATCH  прервано новым нажатием"))
     EndIf
     FlushLog()
 EndFunction
@@ -5237,19 +5260,19 @@ Function RunConsumeTest()
     CollectCandidates(player, USE_THIRST)
     EvalCandidates()
     If C_ThirstCheapest < 0
-        Log("  A16 нет ни одного предмета, утоляющего жажду")
-        Debug.Notification("AutoMedic A16: нет воды в инвентаре")
+        Log(T("  A16 no item that quenches thirst", "  A16 нет ни одного предмета, утоляющего жажду"))
+        Debug.Notification(T("AutoMedic A16: no water in inventory", "AutoMedic A16: нет воды в инвентаре"))
         FlushLog()
         AM_Busy = false
         Return
     EndIf
     Form item = K_Forms[C_ThirstCheapest]
-    Log("  A16 предмет: " + item + " (" + K_Values[C_ThirstCheapest] + "c)")
+    Log(T("  A16 item: ", "  A16 предмет: ") + item + " (" + K_Values[C_ThirstCheapest] + "c)")
     ConsumeProbe(player, item, true)
     Utility.Wait(3.0)
     ConsumeProbe(player, item, false)
-    Log("  A16 готово — сверить с Hardcore.0.log: сколько раз там Adding Food Item")
-    Debug.Notification("AutoMedic A16: готово, см. лог")
+    Log(T("  A16 done - compare with Hardcore.0.log: how many times it says Adding Food Item", "  A16 готово — сверить с Hardcore.0.log: сколько раз там Adding Food Item"))
+    Debug.Notification(T("AutoMedic A16: done, see the log", "AutoMedic A16: готово, см. лог"))
     FlushLog()
     AM_Busy = false
 EndFunction
@@ -5314,15 +5337,15 @@ Function ConsumeProbe(Actor akPlayer, Form akItem, Bool abDrinkPotion)
         EndIf
     EndWhile
     Int fx = EffectsFrom(akPlayer, akItem)
-    String goneText = "не ушла за 3 с"
+    String goneText = T("did not drop within 3 s", "не ушла за 3 с")
     If gone
-        goneText = "через " + R0(tGone * 1000.0) + " мс"
+        goneText = T("after ", "через ") + R0(tGone * 1000.0) + T(" ms", " мс")
     EndIf
-    String thirstText = "не менялась за 3 с"
+    String thirstText = T("did not change within 3 s", "не менялась за 3 с")
     If thirstMoved
-        thirstText = R1(thirst0) + "->" + R1(thirst) + " через " + R0(tThirst * 1000.0) + " мс"
+        thirstText = R1(thirst0) + "->" + R1(thirst) + T(" after ", " через ") + R0(tThirst * 1000.0) + T(" ms", " мс")
     EndIf
-    Log("  A16 " + method + ": вызов " + Ms(t0, tCall) + ", штук " + before + "->" + after + \
-        " (" + goneText + "), жажда " + thirstText + ", эффектов от предмета " + fx0 + "->" + fx + \
+    Log("  A16 " + method + T(": call ", ": вызов ") + Ms(t0, tCall) + T(", count ", ", штук ") + before + "->" + after + \
+        " (" + goneText + T("), thirst ", "), жажда ") + thirstText + T(", effects from the item ", ", эффектов от предмета ") + fx0 + "->" + fx + \
         ", HP " + R1(hp0) + "->" + R1(akPlayer.GetValue(AV_Health)))
 EndFunction

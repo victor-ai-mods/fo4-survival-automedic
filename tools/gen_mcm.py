@@ -281,7 +281,11 @@ Scriptname AutoMedicSettings extends Quest
 ; Кнопка MCM «Сбросить все настройки».
 Function ResetDefaults()
 %(reset)s
-    Debug.Notification("AutoMedic: settings reset / настройки сброшены")
+    If GardenOfEden.GetINISetting("sLanguage:General") == "ru"
+        Debug.Notification("AutoMedic: настройки сброшены")
+    Else
+        Debug.Notification("AutoMedic: settings reset")
+    EndIf
 EndFunction
 """
 
