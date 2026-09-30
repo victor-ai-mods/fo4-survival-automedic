@@ -1105,7 +1105,8 @@ Function Refresh(Bool abForce)
         Log("Таблица собрана за " + spent + " с: разрешено " + AM_Tables.ResolvedCount() + \
             ", пропущено (нет DLC) " + AM_Tables.SkippedCount() + \
             ", без полного FormID " + AM_Tables.NoFullIdCount() + \
-            ", в списке " + AM_AllConsumables.GetSize() + ", эффектов " + AM_Tables.EffectCount())
+            ", в списке " + AM_AllConsumables.GetSize() + ", эффектов " + AM_Tables.EffectCount() + \
+            ", слои исправлений: " + AM_Tables.ActivePatchNames())
     Else
         Log("Таблица уже собрана: " + AM_Tables.ResolvedCount() + " предметов")
     EndIf
@@ -3046,7 +3047,8 @@ String Function ExcludeReason(AutoMedicTables:ItemData akData)
         Return "файл исключений"
     ElseIf Has(flags, TF_CAT_SYRINGER)
         Return "шприцемёт"
-    ElseIf !ALLOW_STIMPAK && Has(flags, TF_CAT_STIMPAK)
+    ; Антибиотики — не стимпак, хотя UFO4P вешает на них ObjectTypeStimpak.
+    ElseIf !ALLOW_STIMPAK && Has(flags, TF_CAT_STIMPAK) && !Has(flags, TF_CURES_DISEASE)
         Return "стимпаки выключены"
     ElseIf !ALLOW_RADAWAY && akData.MedicRadMag > 0.0 && akData.MedicRadDur > 0.0
         Return "антирадин выключен"

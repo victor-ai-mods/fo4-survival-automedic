@@ -28,6 +28,9 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CHUNK_SIZE = 128
+# Столько чанков предметов копирует к себе AutoMedicQuestScript.CacheTables
+# (TB_Items0..2): больше — надо дописать и там.
+CACHED_ITEM_CHUNKS = 3
 INDENT = ' ' * 4
 
 # --- роли эффектов ---------------------------------------------------
@@ -346,8 +349,18 @@ def gen_dispatch(func, ret_type, count, body):
     return '\n'.join(get_lines) + '\n\n' + '\n'.join(set_lines)
 
 
-def gen_plugin_files(files):
-    lines = ['String[] Function PluginFiles() global',
+def gen_int_array(func_name, values):
+    lines = ['Int[] Function %s() global' % func_name,
+             '%sInt[] a = new Int[%d]' % (INDENT, len(values))]
+    for i, value in enumerate(values):
+        lines.append('%sa[%d] = %d' % (INDENT, i, value))
+    lines.append('%sReturn a' % INDENT)
+    lines.append('EndFunction')
+    return '\n'.join(lines)
+
+
+def gen_plugin_files(files, func_name='PluginFiles'):
+    lines = ['String[] Function %s() global' % func_name,
              '%sString[] a = new String[%d]' % (INDENT, len(files))]
     for i, name in enumerate(files):
         lines.append('%sa[%d] = "%s"' % (INDENT, i, name))
@@ -456,10 +469,24 @@ def main():
     with open(os.path.join(ROOT, 'data', 'consumables.json'), encoding='utf-8') as f:
         source = json.load(f)
     files = source['plugins']
-    items = source['items']
+    items = list(source['items'])
     file_index = {name: i for i, name in enumerate(files)}
+    vanilla_index = {item['key']: i for i, item in enumerate(items)}
 
-    needed_perks = sorted({name for item in items
+    # Новые предметы плагинов-исправлений идут в основную таблицу: их FormID
+    # «впрыснуты» в пространство DLC, и без патча GetFormFromFile вернёт None —
+    # строка молча пропустится, как предмет не установленного DLC.
+    patches = source.get('patches', [])
+    for patch in patches:
+        for item in patch['items']:
+            if item['key'] in vanilla_index:
+                continue
+            if item['file'] not in file_index:
+                raise SystemExit('%s: новый предмет %s в собственном пространстве FormID '
+                                 'патча, резолвить его не по чему' % (patch['plugin'], item['key']))
+            items.append(dict(item, _patch=patch['plugin']))
+
+    needed_perks = sorted({name for item in items + [it for p in patches for it in p['items']]
                            for variant in item.get('perkScaling', ())
                            for name in variant['perks']})
     perk_ids = load_perk_ids(args.data, needed_perks)
@@ -468,11 +495,13 @@ def main():
     if missing:
         raise SystemExit('PLANNER_BLACKLIST: нет в таблице %s' % ', '.join(sorted(missing)))
 
-    rows = []
-    for index, item in enumerate(items):
-        rows.append(dict(medic_fields(item), **{
+    def item_row(index, item):
+        label = '%s (%s)' % (item.get('editorId') or '?', item['file'])
+        if item.get('_patch'):
+            label += ', только с ' + item['_patch']
+        return dict(medic_fields(item), **{
             '_index': index,
-            '_label': '%s (%s)' % (item.get('editorId') or '?', item['file']),
+            '_label': label,
             'LocalId': int(item['localId'], 16),
             'PluginId': file_index[item['file']],
             'HealHP': item.get('healHP', 0.0),
@@ -484,7 +513,44 @@ def main():
             'AddictionChance': item.get('addictionChance', 0.0),
             'DiseaseRiskPct': item.get('diseaseRiskPct', 0),
             'Flags': item_flags(item),
-        }))
+        })
+
+    rows = [item_row(index, item) for index, item in enumerate(items)]
+    if len(chunk_ranges(len(rows))) > CACHED_ITEM_CHUNKS:
+        raise SystemExit('предметов %d: AutoMedicQuestScript.CacheTables держит только %d чанка'
+                         % (len(rows), CACHED_ITEM_CHUNKS))
+
+    # Слои исправлений: строки ванильных предметов, которые патч меняет, и их
+    # варианты по перкам. В слой идёт только то, что реально отличается.
+    def data_of(row):
+        return {k: v for k, v in row.items() if not k.startswith('_')}
+
+    layers = []
+    for patch in patches:
+        layer = {'plugin': patch['plugin'], 'rows': [], 'targets': [], 'perks': []}
+        for item in patch['items']:
+            target = vanilla_index.get(item['key'])
+            if target is None:
+                continue
+            row = item_row(target, item)
+            perks_v, chances_v = collect([items[target]], perk_ids)
+            perks_p, chances_p = collect([item], perk_ids)
+            if chances_v != chances_p:
+                raise SystemExit('%s меняет эффекты по броску у %s, слой их не умеет'
+                                 % (patch['plugin'], item['key']))
+            if data_of(row) == data_of(rows[target]) and perks_v == perks_p:
+                continue
+            row['_label'] += ', версия ' + patch['plugin']
+            layer['rows'].append(row)
+            layer['targets'].append(target)
+            for perk in perks_p:
+                perk['ItemIndex'] = target
+                layer['perks'].append(perk)
+        for i, perk in enumerate(layer['perks']):
+            perk['_index'] = i
+        if len(layer['rows']) > CHUNK_SIZE or len(layer['perks']) > CHUNK_SIZE:
+            raise SystemExit('слой %s больше одного чанка' % patch['plugin'])
+        layers.append(layer)
     with open(os.path.join(ROOT, 'data', 'mgef_index.json'), encoding='utf-8') as f:
         mgefs = json.load(f)['effects']
     effects = []
@@ -520,6 +586,7 @@ def main():
         ('CHANCE_COUNT', len(chances)),
         ('CHANCE_CHUNKS', len(chance_spans)),
         ('EFFECT_COUNT', len(effects)),
+        ('PATCH_COUNT', len(layers)),
     ]
 
     raw_parts = []
@@ -537,6 +604,13 @@ def main():
 
     raw_parts.append(gen_raw_chunk('RawEffects', 'EffectData', effects, EFFECT_FIELDS,
                                    labels=[r['_label'] for r in effects]))
+    for n, layer in enumerate(layers):
+        raw_parts.append(gen_raw_chunk('RawPatchItems%d' % n, 'ItemData', layer['rows'],
+                                       ITEM_FIELDS,
+                                       labels=[r['_label'] for r in layer['rows']]))
+        raw_parts.append(gen_int_array('RawPatchTargets%d' % n, layer['targets']))
+        raw_parts.append(gen_raw_chunk('RawPatchPerks%d' % n, 'PerkVariant',
+                                       layer['perks'], PERK_FIELDS))
 
     chunk_access = '\n\n'.join([
         gen_dispatch('Item', 'ItemData', len(item_spans), 'AM_Items'),
@@ -547,6 +621,9 @@ def main():
         gen_raw_dispatch('Items', 'ItemData', len(item_spans)),
         gen_raw_dispatch('Perks', 'PerkVariant', len(perk_spans)),
         gen_raw_dispatch('Chances', 'ChanceEffect', len(chance_spans)),
+        gen_raw_dispatch('PatchItems', 'ItemData', len(layers)),
+        gen_raw_dispatch('PatchTargets', 'Int', len(layers)),
+        gen_raw_dispatch('PatchPerks', 'PerkVariant', len(layers)),
     ])
 
     with open(os.path.join(ROOT, 'tools', 'templates', 'AutoMedicTables.psc.in'),
@@ -560,7 +637,8 @@ def main():
             .replace('%%CACHE_VARS%%', gen_cache_vars(len(item_spans), len(perk_spans),
                                                       len(chance_spans)))
             .replace('%%CHUNK_ACCESS%%', chunk_access)
-            .replace('%%PLUGIN_FILES%%', gen_plugin_files(files))
+            .replace('%%PLUGIN_FILES%%', gen_plugin_files(files) + '\n\n'
+                     + gen_plugin_files([l['plugin'] for l in layers], 'PatchFiles'))
             .replace('%%RAW_DISPATCH%%', raw_dispatch)
             .replace('%%RAW_DATA%%', '\n\n'.join(raw_parts)))
 
@@ -583,6 +661,9 @@ def main():
     print('  перки:    %d в %d чанках' % (len(perks), len(perk_spans)))
     print('  бросок:   %d в %d чанках' % (len(chances), len(chance_spans)))
     print('  эффекты:  %d' % len(effects))
+    for layer in layers:
+        print('  слой %s: %d строк, %d вариантов по перкам'
+              % (layer['plugin'], len(layer['rows']), len(layer['perks'])))
 
 
 if __name__ == '__main__':

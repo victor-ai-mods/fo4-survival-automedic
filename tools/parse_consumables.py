@@ -44,6 +44,17 @@ PLUGINS = [
     'DLCNukaWorld.esm',
 ]
 
+# Необязательные плагины-исправления (2026-09-30). Таблица по-прежнему строится
+# по ванили, а каждый такой плагин даёт отдельный слой: его версии ванильных
+# предметов (UFO4P, например, чинит лечение Яйца болотника 9 -> 90 ОЗ и
+# Нюка-Сайда 1200 -> 75) и его новые предметы. В рантайме слой включается, только
+# если Game.IsPluginInstalled() видит файл, — без патча числа остаются ванильными.
+# Новые записи UFO4P «впрыснуты» в пространство FormID DLC (Яйцо ядер-краба —
+# DLCNukaWorld.esm:0x900000), поэтому резолвятся тем же GetFormFromFile по файлу DLC.
+PATCH_PLUGINS = [
+    'Unofficial Fallout 4 Patch.esp',
+]
+
 # BA2 со строковыми таблицами: имена предметов локализованы, в FULL лежит id.
 STRING_ARCHIVES = {
     'Fallout4.esm': ('Fallout4 - Interface.ba2', 'fallout4'),
@@ -302,7 +313,17 @@ def parse_consumables(plugins, mgef_index, keyword_names, names_en, names_ru,
             name_en = names_en.get(plugin.name, {}).get(sid)
             name_ru = names_ru.get(plugin.name, {}).get(sid)
         elif full:
-            name_en = decode_zstring(full)
+            # Нелокализованный плагин (UFO4P): текст прямо в FULL, и в
+            # переведённой сборке он русский, в UTF-8.
+            raw = full.rstrip(b'\x00')
+            try:
+                text = raw.decode('utf-8')
+            except UnicodeDecodeError:
+                text = decode_zstring(full)
+            if any('Ѐ' <= ch <= 'ӿ' for ch in text):
+                name_ru = text
+            else:
+                name_en = text
 
         weight = 0.0
         data = rec.first(b'DATA')
@@ -664,6 +685,18 @@ def write_report(path, items, mgef_index, wiki_rows, matched, missing, diffs,
         fh.write('\n'.join(lines) + '\n')
 
 
+def build_items(plugins, names_en, names_ru):
+    """ALCH набора плагинов -> (items, mgef_index); более поздний плагин главнее."""
+    avif_names = {k: r.editor_id() for k, (p, r) in collect(plugins, b'AVIF').items()}
+    keyword_names = {k: r.editor_id() for k, (p, r) in collect(plugins, b'KYWD').items()}
+    global_names = {k: r.editor_id() for k, (p, r) in collect(plugins, b'GLOB').items()}
+    perk_names = {k: r.editor_id() for k, (p, r) in collect(plugins, b'PERK').items()}
+    mgef_index = build_mgef_index(plugins, avif_names)
+    items = parse_consumables(plugins, mgef_index, keyword_names, names_en, names_ru,
+                              global_names, perk_names)
+    return items, mgef_index
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--data', default=DEFAULT_DATA, help='папка Data игры')
@@ -680,22 +713,38 @@ def main():
     names_en = load_strings(args.data, 'en')
     names_ru = load_strings(args.data, 'ru')
 
-    avif_names = {k: r.editor_id() for k, (p, r) in collect(plugins, b'AVIF').items()}
-    keyword_names = {k: r.editor_id() for k, (p, r) in collect(plugins, b'KYWD').items()}
-    global_names = {k: r.editor_id() for k, (p, r) in collect(plugins, b'GLOB').items()}
-    perk_names = {k: r.editor_id() for k, (p, r) in collect(plugins, b'PERK').items()}
-
-    print('Классифицирую магические эффекты...')
-    mgef_index = build_mgef_index(plugins, avif_names)
-
     print('Разбираю ALCH...')
-    items = parse_consumables(plugins, mgef_index, keyword_names, names_en, names_ru,
-                              global_names, perk_names)
+    items, mgef_index = build_items(plugins, names_en, names_ru)
     print('  предметов: %d' % len(items))
+
+    # Слои плагинов-исправлений: полный повторный разбор с плагином в конце
+    # порядка загрузки, но в слой идут только предметы, которых он касается.
+    patches = []
+    for patch_name in PATCH_PLUGINS:
+        path = os.path.join(args.data, patch_name)
+        if not os.path.exists(path):
+            print('  ! нет файла, слой пропускаю: %s' % patch_name)
+            continue
+        patch = Plugin(path)
+        touched = {gkey(patch, r.form_id) for r in patch.records(b'ALCH')}
+        patched, patch_mgef = build_items(plugins + [patch], names_en, names_ru)
+        rows = [patched[k] for k in sorted(touched)]
+        for it in rows:
+            if it['key'] in items:
+                # Имена у исправленных ванильных предметов берём ванильные:
+                # в FULL переведённого патча другой язык, а переименований нет.
+                it['nameEn'] = items[it['key']]['nameEn']
+                it['nameRu'] = items[it['key']]['nameRu']
+        for key, info in patch_mgef.items():
+            mgef_index.setdefault(key, info)
+        patches.append({'plugin': patch_name, 'items': rows})
+        print('  слой %s: %d предметов (%d новых)'
+              % (patch_name, len(rows), sum(1 for it in rows if it['key'] not in items)))
 
     # В индекс эффектов пишем только то, что реально встречается у предметов, —
     # иначе в файл уедут все 800+ эффектов игры.
     used = {e['mgef'] for it in items.values() for e in it['effects']}
+    used |= {e['mgef'] for p in patches for it in p['items'] for e in it['effects']}
     mgef_out = {k: v.as_dict() for k, v in mgef_index.items() if k in used}
     print('  эффектов, используемых предметами: %d' % len(mgef_out))
 
@@ -704,7 +753,8 @@ def main():
 
     with open(os.path.join(args.out, 'consumables.json'), 'w', encoding='utf-8') as fh:
         json.dump({'plugins': [p.name for p in plugins],
-                   'items': [items[k] for k in sorted(items)]},
+                   'items': [items[k] for k in sorted(items)],
+                   'patches': patches},
                   fh, ensure_ascii=False, indent=1)
     with open(os.path.join(args.out, 'mgef_index.json'), 'w', encoding='utf-8') as fh:
         json.dump({'effects': [mgef_out[k] for k in sorted(mgef_out)]},

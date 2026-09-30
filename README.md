@@ -34,7 +34,10 @@ Written for the author's own Survival playthrough; the code is public domain, ta
   check every few seconds, a full check only when a threshold is actually crossed.
 
 It never treats companions and never touches items from other mods, quest items, or anything on
-your exclusion list.
+your exclusion list. The one exception is the Unofficial Fallout 4 Patch, which is supported but
+not required: with it installed, the mod uses UFO4P's corrected numbers for the 37 items it changes
+(a Mirelurk Egg heals 90 HP instead of 9 and counts as food, Nuka-Cide heals 75 HP, not 1200)
+and its Nukalurk Egg; without it, the vanilla numbers stay.
 
 ## Requirements
 

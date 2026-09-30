@@ -109,6 +109,12 @@ EndStruct
 ; --- кеш, собранный BuildTables() (уезжает в сейв) --------------------
 %%CACHE_VARS%%
 EffectData[] AM_Effects
+; Варианты по перкам из включённых слоёв исправлений (UFO4P): ванильные строки
+; тех же предметов в AM_Perks* при сборке гасятся (ItemIndex = -1).
+PerkVariant[] AM_PatchPerks
+; Маска слоёв (бит на файл PatchFiles()), с которой таблица собрана: поставили
+; или убрали патч — IsBuilt() скажет «пересобрать».
+Int AM_BuiltPatches = -1
 
 Int AM_Resolved = 0
 Int AM_Skipped = 0
@@ -122,7 +128,42 @@ Int AM_BuiltVersion = 0
 ; =====================================================================
 
 Bool Function IsBuilt()
-    Return AM_BuiltVersion == DATA_VERSION
+    Return AM_BuiltVersion == DATA_VERSION && AM_BuiltPatches == InstalledPatchMask()
+EndFunction
+
+; Слои исправлений, чьи файлы сейчас в порядке загрузки: бит i — PatchFiles()[i].
+Int Function InstalledPatchMask()
+    String[] names = PatchFiles()
+    Int mask = 0
+    Int bit = 1
+    Int p = 0
+    While p < names.Length
+        If Game.IsPluginInstalled(names[p])
+            mask += bit
+        EndIf
+        bit *= 2
+        p += 1
+    EndWhile
+    Return mask
+EndFunction
+
+; Какие слои включены в текущую таблицу (для лога).
+String Function ActivePatchNames()
+    String[] names = PatchFiles()
+    String out = ""
+    Int bit = 1
+    Int p = 0
+    While p < names.Length
+        If AM_BuiltPatches > 0 && (AM_BuiltPatches / bit) % 2 == 1
+            If out != ""
+                out += ", "
+            EndIf
+            out += names[p]
+        EndIf
+        bit *= 2
+        p += 1
+    EndWhile
+    Return out
 EndFunction
 
 Int Function ResolvedCount()
@@ -156,6 +197,40 @@ Function BuildTables(Bool abForce = false)
     AM_Skipped = 0
     AM_NoFullId = 0
 
+    ; Слои исправлений: строки, которыми включённый патч заменяет ванильные,
+    ; и номера этих строк в таблице. Более поздний слой главнее.
+    Int patchMask = InstalledPatchMask()
+    ItemData[] patchRows = new ItemData[0]
+    Int[] patchTargets = new Int[0]
+    AM_PatchPerks = new PerkVariant[0]
+    Int bit = 1
+    Int p = 0
+    While p < PATCH_COUNT
+        If (patchMask / bit) % 2 == 1
+            ItemData[] layerRows = RawPatchItems(p)
+            Int[] layerTargets = RawPatchTargets(p)
+            Int r = 0
+            While r < layerRows.Length
+                Int known = patchTargets.Find(layerTargets[r])
+                If known >= 0
+                    patchRows[known] = layerRows[r]
+                Else
+                    patchRows.Add(layerRows[r], 1)
+                    patchTargets.Add(layerTargets[r], 1)
+                EndIf
+                r += 1
+            EndWhile
+            PerkVariant[] layerPerks = RawPatchPerks(p)
+            r = 0
+            While r < layerPerks.Length
+                AM_PatchPerks.Add(layerPerks[r], 1)
+                r += 1
+            EndWhile
+        EndIf
+        bit *= 2
+        p += 1
+    EndWhile
+
     String[] files = PluginFiles()
     ; Индекс загрузки каждого файла; -1 — ещё не найден (или файла нет).
     Int[] loadIndex = new Int[files.Length]
@@ -167,6 +242,13 @@ Function BuildTables(Bool abForce = false)
     Int chunk = 0
     While chunk < ITEM_CHUNKS
         ItemData[] rows = RawItems(chunk)
+        Int t = 0
+        While t < patchTargets.Length
+            If patchTargets[t] / CHUNK_SIZE == chunk
+                rows[patchTargets[t] % CHUNK_SIZE] = patchRows[t]
+            EndIf
+            t += 1
+        EndWhile
         Int i = 0
         While i < rows.Length
             Form found = Game.GetFormFromFile(rows[i].LocalId, files[rows[i].PluginId])
@@ -201,9 +283,21 @@ Function BuildTables(Bool abForce = false)
         e += 1
     EndWhile
 
+    ; Варианты по перкам у предметов, которые заменил слой, берутся из слоя
+    ; (AM_PatchPerks), а ванильные гасятся.
     chunk = 0
     While chunk < PERK_CHUNKS
-        SetPerkChunk(chunk, RawPerks(chunk))
+        PerkVariant[] perkRows = RawPerks(chunk)
+        If patchTargets.Length > 0
+            Int k = 0
+            While k < perkRows.Length
+                If patchTargets.Find(perkRows[k].ItemIndex) >= 0
+                    perkRows[k].ItemIndex = -1
+                EndIf
+                k += 1
+            EndWhile
+        EndIf
+        SetPerkChunk(chunk, perkRows)
         chunk += 1
     EndWhile
 
@@ -214,6 +308,7 @@ Function BuildTables(Bool abForce = false)
     EndWhile
 
     AM_BuiltVersion = DATA_VERSION
+    AM_BuiltPatches = patchMask
 EndFunction
 
 ; Те же признаки, что UsesOf в AutoMedicQuestScript (без учёта перков и настроек).
@@ -389,6 +484,17 @@ PerkVariant[] Function GetPerkVariants(Int aItemIndex)
         EndWhile
         chunk += 1
     EndWhile
+    If AM_PatchPerks != None && AM_PatchPerks.Length > 0
+        Int j = AM_PatchPerks.FindStruct("ItemIndex", aItemIndex, 0)
+        While j >= 0
+            out.Add(AM_PatchPerks[j], 1)
+            If j + 1 < AM_PatchPerks.Length
+                j = AM_PatchPerks.FindStruct("ItemIndex", aItemIndex, j + 1)
+            Else
+                j = -1
+            EndIf
+        EndWhile
+    EndIf
     Return out
 EndFunction
 
