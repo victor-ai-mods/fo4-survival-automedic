@@ -1367,6 +1367,11 @@ Function LoadSettings()
         SetLogTarget(m.LogTarget)
     EndIf
     LOG_LEVEL = m.LogLevel
+    ; Лог «никуда» — значит и строить нечего. До 2026-09-30 уровень оставался
+    ; из MCM, и при «Трассировке» цикл тратил ~1 с на отчёт, который выбрасывался.
+    If LOG_TARGET == LOG_TO_NONE
+        LOG_LEVEL = 0
+    EndIf
     NOTIFY_LEVEL = m.NotifyLevel
     DRY_RUN = m.DryRun
     ENABLE_HEALTH = m.EnableHealth
