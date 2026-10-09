@@ -28,6 +28,12 @@ Written for the author's own Survival playthrough; the code is public domain, ta
 - **Action points.** When AP drinks are allowed (in combat only by default, and only below an AP
   threshold), the mod refills AP to 100% with Nuka-Cola, Vim and the like, and their healing
   counts toward health. A cola reserve keeps the bottles that restore the most AP.
+- **One item per press** (optional, for animation mods like Immersive Animation Framework):
+  each press or automatic check takes only the most urgent item, and the next press takes the
+  next one.
+- **Nuka-Cola when out of water** (optional): when there is nothing else to drink, the thirst
+  loop drinks Nuka-Cola and Vim. Cola quenches thirst weaker than water and makes you a little
+  hungrier; the cola reserve is kept.
 - **Prevention, independent of the automatic mode:** herbal remedies before sleep and after
   risky food, Rad-X when radiation rises fast for long enough.
 - **Automatic mode** (off by default) with its own health and radiation thresholds: a cheap

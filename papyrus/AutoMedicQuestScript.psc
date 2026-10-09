@@ -114,6 +114,15 @@ Float Property HEAL_EPS = 0.5 AutoReadOnly Hidden
 ; Не 6, как в §7: под SCM каждая еда даёт пол стадии, 8 очков (прогон
 ; 2026-09-21, Hardcore.1.log), а Hungry — это пул от -48 до -96: до 12 штук.
 Int MAX_ITEMS_PER_NEED = 12
+; MCM OneItemPerPress (2026-10-10, просьба игрока ради Immersive Animation
+; Framework): нажатие и авто-цикл принимают одну штуку — самую срочную
+; (ExecuteOne), остальное — следующим нажатием по новому плану.
+Bool ONE_ITEM = false
+; Пауза между снадобьями в режиме одного предмета: анимация успевает доиграть.
+Float Property ONE_ITEM_GAP = 3.0 AutoReadOnly Hidden
+; MCM ColaForThirst: питья нет — цикл жажды пьёт колу (у HC_Manager своя
+; ветка ObjectTypeNukaCola: жажда +40 % цены, голод -20 %). Только после воды.
+Bool COLA_FOR_THIRST = false
 ; Шаг 7, MCM «Что лечить» и прочие тумблеры без констант-предшественников.
 Bool ENABLE_HEALTH = true
 Bool ENABLE_LIMBS = true
@@ -461,6 +470,9 @@ Float C_APBig
 Float C_APLock
 String C_APWhy
 Int C_ThirstCount
+; Кола под жажду (COLA_FOR_THIRST) — отдельно: её нет в списке жажды AM_List*,
+; и RecordIdle сверяет C_ThirstCount со счётом этого списка.
+Int C_ColaThirstCount
 Int C_DiseaseCount
 Int C_AddictionCount
 Int C_APCount
@@ -1424,6 +1436,8 @@ Function LoadSettings()
     USE_CHEMS = m.UseChems
     USE_ALCOHOL = m.UseAlcohol
     MAX_ITEMS_PER_NEED = ClampInt(m.MaxItemsPerNeed, 1, 12)
+    ONE_ITEM = m.OneItemPerPress
+    COLA_FOR_THIRST = m.ColaForThirst
     USE_EXCLUSIONS = m.UseExclusions
     FOOD_RESERVE = m.FoodReserve
     FOOD_RESERVE_RADS = m.FoodReserveCountRad
@@ -1439,7 +1453,8 @@ Function LoadSettings()
         "| hp " + R0(HEAL_TRIGGER_PCT) + "->" + R0(HEAL_TARGET_PCT) + "%, stimpak " + \
         OnOff(ALLOW_STIMPAK, "") + T("reserve ", "резерв ") + RESERVE_STIMPAKS + \
         T(" | hunger ", " | голод ") + hunger + T(", thirst ", ", жажда ") + thirst + T(", up to ", ", до ") + MAX_ITEMS_PER_NEED + \
-        T(" items, risk <= ", " шт., риск <= ") + MAX_DISEASE_RISK_PCT + T("%, food reserve ", "%, запас еды ") + FOOD_RESERVE + \
+        T(" items, cola for thirst ", " шт., кола от жажды ") + OnOff(COLA_FOR_THIRST, "") + \
+        T("one item per press ", "один предмет за нажатие ") + OnOff(ONE_ITEM, "") + T("risk <= ", "риск <= ") + MAX_DISEASE_RISK_PCT + T("%, food reserve ", "%, запас еды ") + FOOD_RESERVE + \
         T(" (irradiated ", " (облуч. ") + OnOff(FOOD_RESERVE_RADS, "") + ")" + \
         " | rads " + m.RadTriggerPct + "->" + m.RadTargetPct + "%, radaway " + \
         OnOff(ALLOW_RADAWAY, "") + T("reserve ", "резерв ") + RESERVE_RADAWAY + T(", intake <= ", ", набор <= ") + \
@@ -1600,6 +1615,10 @@ Function TopUpHerbals(String asWhy)
             ElseIf m.DryRun
                 took = Join(took, HerbalNames[i] + T(" (plan only)", " (только план)"))
             Else
+                ; Один предмет за раз: следующее снадобье — после анимации.
+                If took != "" && m.OneItemPerPress
+                    Utility.WaitMenuMode(ONE_ITEM_GAP)
+                EndIf
                 player.EquipItem(HB_Items[i], false, true)
                 took = Join(took, HerbalNames[i])
             EndIf
@@ -3325,7 +3344,7 @@ Int Function UsesOf(AutoMedicTables:ItemData akData)
     If Has(flags, TF_SATES_HUNGER)
         uses = WithBit(uses, USE_HUNGER)
     EndIf
-    If Has(flags, TF_SATES_THIRST)
+    If Has(flags, TF_SATES_THIRST) || (COLA_FOR_THIRST && Has(flags, TF_CAT_COLA))
         uses = WithBit(uses, USE_THIRST)
     EndIf
     If Has(flags, TF_CURES_DISEASE)
@@ -3338,6 +3357,11 @@ Int Function UsesOf(AutoMedicTables:ItemData akData)
         uses = WithBit(uses, USE_AP)
     EndIf
     Return uses
+EndFunction
+
+; Кандидат k идёт под жажду только как кола (MCM ColaForThirst), не как питьё.
+Bool Function ColaThirst(Int k)
+    Return Has(K_Uses[k], USE_THIRST) && !Has(K_Flags[k], TF_SATES_THIRST)
 EndFunction
 
 ; "" — предмет годится; иначе причина, по которой мод его не тронет никогда.
@@ -3538,6 +3562,7 @@ Function EvalCandidates()
     C_RadsCount = 0
     C_HungerCount = 0
     C_ThirstCount = 0
+    C_ColaThirstCount = 0
     C_DiseaseCount = 0
     C_AddictionCount = 0
     C_APCount = 0
@@ -3571,7 +3596,9 @@ Function EvalCandidates()
                 C_HungerCheapest = k
             EndIf
         EndIf
-        If !K_APLocked[k] && Has(K_Uses[k], USE_THIRST)
+        If !K_APLocked[k] && ColaThirst(k)
+            C_ColaThirstCount += 1
+        ElseIf !K_APLocked[k] && Has(K_Uses[k], USE_THIRST)
             C_ThirstCount += 1
             If C_ThirstCheapest < 0 || K_Values[k] < K_Values[C_ThirstCheapest]
                 C_ThirstCheapest = k
@@ -4571,7 +4598,7 @@ Function WriteCandidates(Actor akPlayer)
         T(", not needed now ", ", не нужны сейчас ") + C_Idle + T(", excluded ", ", исключено ") + C_Excluded + \
         T(", not in table ", ", вне таблицы ") + C_Unknown + T(" (incl. AutoMedic itself)  |  hp ", " (вкл. сам AutoMedic)  |  hp ") + C_HPCount + \
         ", rads " + C_RadsCount + ", limbs " + C_LimbsCount + ", hunger " + C_HungerCount + \
-        ", thirst " + C_ThirstCount + ", disease " + C_DiseaseCount + ", addict " + \
+        ", thirst " + C_ThirstCount + "+" + C_ColaThirstCount + T(" cola", " кола") + ", disease " + C_DiseaseCount + ", addict " + \
         C_AddictionCount + ", ap " + C_APCount)
     If C_UnknownForms != None && C_UnknownForms.Length > 0
         Log(T("         not in table (for items-user.json): ", "         вне таблицы (для items-user.json): ") + UnknownText(akPlayer))
@@ -4717,7 +4744,7 @@ Function WritePlan()
         Log(T("         hunger <- loop: ", "         hunger <- цикл: ") + LoopNote(USE_HUNGER, C_HungerCount))
     EndIf
     If N_Thirst > 0.0
-        Log(T("         thirst <- loop: ", "         thirst <- цикл: ") + LoopNote(USE_THIRST, C_ThirstCount))
+        Log(T("         thirst <- loop: ", "         thirst <- цикл: ") + LoopNote(USE_THIRST, C_ThirstCount + C_ColaThirstCount))
     EndIf
     If P_Notes != ""
         Log("         note: " + P_Notes)
@@ -4735,6 +4762,10 @@ Function WritePlan()
         R0(Math.Min(T_RadOut, radNeed)) + "/" + R0(radNeed) + T(" (plan removal ", " (вывод плана ") + R0(T_RadOut) + \
         T(", eaten +", ", съедено +") + R1(T_RadIn) + ")  ap " + R0(Math.Min(T_AP, N_APNeed)) + "/" + R0(N_APNeed))
     Log("  ORDER  " + OrderText())
+    If ONE_ITEM
+        Log(T("         one item per press: only the most urgent is taken (limbs, hp not food, ap, rads, hunger, thirst, the rest)", \
+            "         один предмет за нажатие: принимается только самое срочное (конечности, ОЗ не едой, ОД, радиация, голод, жажда, прочее)"))
+    EndIf
 EndFunction
 
 ; Порядок приёма по §4.4: 1 конечности и ОД, 2 вывод радиации, 3-4 циклы голода
@@ -4827,7 +4858,7 @@ String Function UnmetText()
     If E_DryRun && N_Hunger > 0.0 && C_HungerCount == 0
         out = Join(out, T("hunger: no food", "hunger: нет еды"))
     EndIf
-    If E_DryRun && N_Thirst > 0.0 && C_ThirstCount == 0
+    If E_DryRun && N_Thirst > 0.0 && C_ThirstCount + C_ColaThirstCount == 0
         out = Join(out, T("thirst: nothing to drink", "thirst: нет питья"))
     EndIf
     If N_Disease > 0 && P_For.Find(NEED_DISEASE) < 0
@@ -4868,7 +4899,24 @@ Function Notify()
     ElseIf spent == ""
         spent = T("nothing to take", "нечего принять")
     EndIf
-    Debug.Notification("AutoMedic: " + spent + " | " + AfterText())
+    String more = ""
+    If OneDone() && OneMoreLeft()
+        more = T(" | press again", " | нажмите ещё")
+    EndIf
+    Debug.Notification("AutoMedic: " + spent + " | " + AfterText() + more)
+EndFunction
+
+; Режим одного предмета: осталось ли что-то следующему нажатию — строка плана
+; не исполнена или голод/жажда (по ReadAfter) всё ещё не ниже порога.
+Bool Function OneMoreLeft()
+    Int e = 0
+    While e < P_K.Length
+        If !E_Done[e]
+            Return true
+        EndIf
+        e += 1
+    EndWhile
+    Return A_Hunger >= HUNGER_TRIGGER || A_Thirst >= THIRST_TRIGGER
 EndFunction
 
 Function NotifyPlan()
@@ -5013,6 +5061,10 @@ EndFunction
 ; накладывает эффект, но не тратит предмет, и Survival его не засчитывает
 ; (шаг 4, A16).
 Function Execute(Actor akPlayer)
+    If ONE_ITEM
+        ExecuteOne(akPlayer)
+        Return
+    EndIf
     ExecutePhase(akPlayer, 1, 0)
     ExecutePhase(akPlayer, 2, 0)
     If E_Step > 0
@@ -5028,8 +5080,35 @@ Function Execute(Actor akPlayer)
     ExecutePhase(akPlayer, 5, NEED_AP)
     ; Рад-еда (M4 — только сытым) ещё и лечит: её — до перепроверки ОЗ.
     ExecutePhase(akPlayer, 5, NEED_RADS)
-    ExecuteHealth(akPlayer)
+    ExecuteHealth(akPlayer, false)
     ExecutePhase(akPlayer, 6, 0)
+EndFunction
+
+; Режим «один предмет за нажатие» (MCM OneItemPerPress): первая принятая штука
+; заканчивает исполнение (OneDone), остальное достанется следующему нажатию
+; или авто-циклу — их план строится заново, с учётом «в полёте». Порядок — по
+; срочности, а не §4.4: стимпак на конечности (он и лечит), лечение не едой,
+; ОД, вывод радиации, голод, жажда, затем то, что M4 велит есть сытым, и
+; болезни. Еда на ОЗ здесь после голода: голодным она не подействует.
+Function ExecuteOne(Actor akPlayer)
+    ExecutePhase(akPlayer, 1, NEED_LIMBS)
+    ExecuteHealth(akPlayer, true)
+    ExecutePhase(akPlayer, 1, NEED_AP)
+    ExecutePhase(akPlayer, 2, 0)
+    RunLoop(akPlayer, USE_HUNGER, AV_Hunger, HUNGER_TRIGGER, HUNGER_TARGET, "hunger")
+    RunLoop(akPlayer, USE_THIRST, AV_Thirst, THIRST_TRIGGER, THIRST_TARGET, "thirst")
+    ExecutePhase(akPlayer, 5, NEED_AP)
+    ExecutePhase(akPlayer, 5, NEED_RADS)
+    ExecuteHealth(akPlayer, false)
+    ExecutePhase(akPlayer, 6, 0)
+    If OneDone()
+        LogAt(LOG_DETAILED, T("  ONE    one item per press - the rest on the next press", "  ONE    один предмет за нажатие - остальное следующим нажатием"))
+    EndIf
+EndFunction
+
+; В режиме одного предмета он уже принят — дальше ничего не исполнять.
+Bool Function OneDone()
+    Return ONE_ITEM && E_Step > 0
 EndFunction
 
 Function InitExecution()
@@ -5061,7 +5140,7 @@ EndFunction
 ; Строки плана фазы aiPhase (и нужды aiNeed, если не 0).
 Function ExecutePhase(Actor akPlayer, Int aiPhase, Int aiNeed)
     Int e = 0
-    While e < P_K.Length
+    While e < P_K.Length && !OneDone()
         If !E_Done[e] && PhaseOf(e) == aiPhase && (aiNeed == 0 || P_For[e] == aiNeed)
             ApplyEntry(akPlayer, e)
         EndIf
@@ -5166,13 +5245,13 @@ EndFunction
 ; ОЗ в G6 — иначе цикл съел бы её голодным, M4); когда кончаются — любые.
 Function RunLoop(Actor akPlayer, Int aiUse, ActorValue akAV, Int aiTrigger, Int aiTarget, String asLabel)
     Float stage = akPlayer.GetValue(akAV)
-    If stage < aiTrigger
+    If stage < aiTrigger || OneDone()
         Return
     EndIf
     Int taken = 0
     Int stalled = 0
     String why = ""
-    While why == "" && Math.Floor(stage + 0.5) > aiTarget
+    While why == "" && Math.Floor(stage + 0.5) > aiTarget && !OneDone()
         If taken >= MAX_ITEMS_PER_NEED
             why = T("limit ", "лимит ") + MAX_ITEMS_PER_NEED + T(" items", " предметов")
         ElseIf stalled >= MAX_STALLED
@@ -5219,22 +5298,28 @@ Float Function WaitStage(Actor akPlayer, ActorValue akAV, Float afFrom)
     Return now
 EndFunction
 
-; Кандидат для цикла или -1: сначала не нужные плану штуки, из них — самая
-; дешёвая по LoopCost.
+; Кандидат для цикла или -1: кола под жажду — только когда нет питья; дальше
+; сначала не нужные плану штуки, из них — самая дешёвая по LoopCost.
+; ОД-напитки, запертые порогом ОД (K_APLocked), циклам не достаются: так
+; задумано в EvalCandidates, но до 2026-10-10 LoopPick этого не проверял.
 Int Function LoopPick(Int aiUse)
     Totals(-1)
     Int best = -1
     Float bestCost = 0.0
     Bool bestFree = false
+    Bool bestMain = false
     Int k = 0
     While k < K_Forms.Length
-        If Has(K_Uses[k], aiUse) && !E_Bad[k] && FreeLeft(k) > 0 && LoopRadsAllowed(k)
+        If Has(K_Uses[k], aiUse) && !E_Bad[k] && !K_APLocked[k] && FreeLeft(k) > 0 && LoopRadsAllowed(k)
+            Bool isMain = aiUse != USE_THIRST || !ColaThirst(k)
             Bool isFree = K_Counts[k] - E_Used[k] - PendingPlanned(k) > 0
             Float cost = LoopCost(k)
-            If best < 0 || (isFree && !bestFree) || (isFree == bestFree && cost < bestCost)
+            If best < 0 || (isMain && !bestMain) || \
+                (isMain == bestMain && ((isFree && !bestFree) || (isFree == bestFree && cost < bestCost)))
                 best = k
                 bestCost = cost
                 bestFree = isFree
+                bestMain = isMain
             EndIf
         EndIf
         k += 1
@@ -5299,11 +5384,15 @@ EndFunction
 ; рад-еда фазы 5 тоже. Поэтому нужда перечитывается по живым ОЗ и «в полёте»
 ; (с радиацией ещё не исполненных строк, M1), и строка на ОЗ, без которой
 ; нужда уже в пределах допуска, пропускается — обрезка §4.3 по факту.
-Function ExecuteHealth(Actor akPlayer)
+; abNoFood — только не еда (ExecuteOne до цикла голода): строки с едой ждут.
+Function ExecuteHealth(Actor akPlayer, Bool abNoFood)
+    If OneDone()
+        Return
+    EndIf
     Bool any = false
     Int e = 0
     While e < P_K.Length && !any
-        any = !E_Done[e] && P_For[e] == NEED_HP
+        any = !E_Done[e] && P_For[e] == NEED_HP && !(abNoFood && K_AfterFood[P_K[e]])
         e += 1
     EndWhile
     If !any
@@ -5312,8 +5401,8 @@ Function ExecuteHealth(Actor akPlayer)
     Float need = RecheckHP(akPlayer)
     Float tol = HPTolerance()
     e = 0
-    While e < P_K.Length
-        If !E_Done[e] && P_For[e] == NEED_HP
+    While e < P_K.Length && !OneDone()
+        If !E_Done[e] && P_For[e] == NEED_HP && !(abNoFood && K_AfterFood[P_K[e]])
             Int k = P_K[e]
             If need <= tol
                 E_Done[e] = true
