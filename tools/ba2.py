@@ -9,6 +9,7 @@ packedSize != 0 -> поток zlib.
 Таблица имён в конце: на файл u16 длина + байты имени.
 """
 
+import mmap
 import struct
 import zlib
 
@@ -19,8 +20,9 @@ _ENTRY = struct.Struct('<I4sIIQIII')
 class BA2:
     def __init__(self, path):
         self.path = str(path)
+        # mmap, not f.read(): the mesh archives are ~2 GB each; pages are read on demand and stay evictable
         with open(self.path, 'rb') as f:
-            self.buf = f.read()
+            self.buf = mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ)
         magic, version, kind, count, name_off = _HDR.unpack_from(self.buf, 0)
         if magic != b'BTDX':
             raise ValueError('%s: не BA2' % self.path)
