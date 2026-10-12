@@ -108,6 +108,26 @@ Int Property MAX_PLAN_ITEMS = 12 AutoReadOnly Hidden
 ; всегда дают оптимум, 1000 — с запасом) и «равенство» потерь в ОЗ.
 Int Property HEAL_NODE_BUDGET = 1000 AutoReadOnly Hidden
 Float Property HEAL_EPS = 0.5 AutoReadOnly Hidden
+; MCM CombatMinHealRatePct (2026-10-12, решение пользователя): в бою, когда ОЗ
+; ниже RATE_BELOW_PCT, скорость лечения (сумма сил действующих эффектов,
+; % максимума ОЗ в секунду) должна быть не ниже этой — даже если объёма лечения
+; «в полёте» уже хватает. Одинаковые и разные предметы складываются (шаг 4, A5).
+; 0 — выкл. Штук на скорость — не больше MAX_ITEMS_PER_NEED.
+Float MIN_RATE_PCT = 0.0
+; MCM CombatRateStimpak: можно ли брать ради скорости стимпак. Выкл. — только
+; еда и питьё; стимпак «в полёте» или взятый на объём в скорость идёт всё равно.
+Bool RATE_STIMPAK = true
+; MCM CombatRateBelowPct: правило скорости действует, только пока ОЗ ниже этого
+; (% максимума после вывода радиации, как пороги лечения). Свой порог, не
+; HEAL_TRIGGER_PCT (решение пользователя 2026-10-12).
+Float RATE_BELOW_PCT = 50.0
+; Эффект, которому осталось меньше этого, в скорость не идёт: он вот-вот кончится.
+Float Property RATE_MIN_LEFT = 5.0 AutoReadOnly Hidden
+; Недобор скорости меньше этого (ОЗ/с) нуждой не считается.
+Float Property RATE_EPS = 0.05 AutoReadOnly Hidden
+; fDiffMultEffectDuration_SV (шаг 4, A22): в Survival лечение идёт в 10 раз
+; дольше и во столько же раз слабее в секунду.
+Float Property SURVIVAL_DURATION_MULT = 10.0 AutoReadOnly Hidden
 
 ; --- шаг 6: исполнение (§4.4) ---
 ; iMaxItemsPerNeed §7: больше предметов один цикл голода (жажды) не съест.
@@ -297,6 +317,8 @@ Int Property NEED_HP = 3 AutoReadOnly Hidden
 Int Property NEED_DISEASE = 4 AutoReadOnly Hidden
 Int Property NEED_ADDICTION = 5 AutoReadOnly Hidden
 Int Property NEED_AP = 6 AutoReadOnly Hidden
+; Строки, взятые ради скорости лечения в бою (PlanRate), а не объёма.
+Int Property NEED_HP_RATE = 7 AutoReadOnly Hidden
 
 Bool AM_ToolGiven = false
 Bool AM_LogOpen = false
@@ -424,6 +446,9 @@ Float S_InRadOut
 Float S_InRadIn
 Float S_InAP
 Float S_InDamage
+; Скорость лечения «в полёте», ОЗ/с: силы эффектов лечения минус урона,
+; которым осталось не меньше RATE_MIN_LEFT.
+Float S_InRate
 Bool S_AntiradActive
 
 Float N_Hunger
@@ -434,6 +459,10 @@ Float N_EffMaxNow
 Float N_EffMaxAfter
 Float N_HPPctEff
 Bool N_HPTriggered
+; Нужная скорость лечения, ОЗ/с (0 — правило не действует: выкл., не бой или
+; ОЗ выше порога), и сколько её не хватает сверх «в полёте».
+Float N_RateGoal
+Float N_RateNeed
 Float N_RadTrigger
 Float N_RadTarget
 Int N_Limbs
@@ -496,6 +525,8 @@ Int[] K_Values
 Int[] K_Risk
 Int[] K_Avail
 Float[] K_Heal
+; Скорость лечения штуки, ОЗ/с (K_Heal / длительность; мгновенное — 0).
+Float[] K_Rate
 Float[] K_RadOut
 Float[] K_RadIn
 ; M4: еда (ObjectTypeFood без HC_IgnoreAsFood), съеденная голодным, не
@@ -536,6 +567,8 @@ Float G_SecondScore
 Int G_Considered
 ; Была ли нужда брошена из-за MIN_SCORE_* (для UNMET).
 Bool P_RadsUnprofitable
+; Скорость лечения не добрана из-за лимита штук MAX_ITEMS_PER_NEED (для UNMET).
+Bool P_RateLimitHit
 
 ; --- стадия C: поиск набора с минимальным перелечением (HealSearch) ---
 ; Типы кандидатов по убыванию H_Cov: кандидат k, закрытие нужды за штуку,
@@ -576,6 +609,9 @@ Int E_Step
 ; rads, съеденные циклами голода и жажды (MAX_INGESTED_RADS общий с планом).
 Float E_LoopRadIn
 String E_Unmet
+; Скорость лечения при исполнении, ОЗ/с: «в полёте» фазы 0 плюс принятые
+; строки плана (циклы голода/жажды не в счёт — еда голодным не лечит, M4).
+Float E_Rate
 ; Итог после исполнения (строка AFTER и сводка).
 Float A_HP
 Float A_MaxHP
@@ -942,6 +978,8 @@ String Function NeedName(Int aiNeed)
         Return "addict"
     ElseIf aiNeed == NEED_AP
         Return "ap"
+    ElseIf aiNeed == NEED_HP_RATE
+        Return "hp-rate"
     EndIf
     Return "?"
 EndFunction
@@ -1436,6 +1474,9 @@ Function LoadSettings()
     USE_CHEMS = m.UseChems
     USE_ALCOHOL = m.UseAlcohol
     MAX_ITEMS_PER_NEED = ClampInt(m.MaxItemsPerNeed, 1, 12)
+    MIN_RATE_PCT = Math.Max(m.CombatMinHealRatePct, 0.0)
+    RATE_STIMPAK = m.CombatRateStimpak
+    RATE_BELOW_PCT = m.CombatRateBelowPct as Float
     ONE_ITEM = m.OneItemPerPress
     COLA_FOR_THIRST = m.ColaForThirst
     USE_EXCLUSIONS = m.UseExclusions
@@ -1452,6 +1493,7 @@ Function LoadSettings()
         OnOff(ENABLE_ADDICTION, "addiction") + \
         "| hp " + R0(HEAL_TRIGGER_PCT) + "->" + R0(HEAL_TARGET_PCT) + "%, stimpak " + \
         OnOff(ALLOW_STIMPAK, "") + T("reserve ", "резерв ") + RESERVE_STIMPAKS + \
+        T(", combat rate >= ", ", в бою скорость >= ") + R1(MIN_RATE_PCT) + T("%/s at hp < ", "%/с при ОЗ < ") + R0(RATE_BELOW_PCT) + T("%, stimpak ", "%, стимпак ") + OnOff(RATE_STIMPAK, "") + \
         T(" | hunger ", " | голод ") + hunger + T(", thirst ", ", жажда ") + thirst + T(", up to ", ", до ") + MAX_ITEMS_PER_NEED + \
         T(" items, cola for thirst ", " шт., кола от жажды ") + OnOff(COLA_FOR_THIRST, "") + \
         T("one item per press ", "один предмет за нажатие ") + OnOff(ONE_ITEM, "") + T("risk <= ", "риск <= ") + MAX_DISEASE_RISK_PCT + T("%, food reserve ", "%, запас еды ") + FOOD_RESERVE + \
@@ -1823,6 +1865,11 @@ Function AutoPoll(AutoMedicSettings m)
     If m.EnableHealth && pctEff <= m.AutoHealTriggerPct
         why = Join(why, "hp " + R0(pctEff) + "%")
         bits = WithBit(bits, USE_HP)
+    ElseIf m.EnableHealth && combat && m.CombatMinHealRatePct > 0.0 && pctEff <= m.CombatRateBelowPct
+        ; Скорость лечения в бою: хватает ли её, видно только по эффектам — это
+        ; уже подробная проверка (BuildNeeds).
+        why = Join(why, "hp-rate " + R0(pctEff) + "%")
+        bits = WithBit(bits, USE_HP)
     EndIf
     Float hunger = 0.0
     Float thirst = 0.0
@@ -1997,7 +2044,7 @@ EndFunction
 ; (еда под запас, питьё после стимпака и т. п.).
 Int Function PrimaryBits()
     Int bits = 0
-    If N_HP > 0.0
+    If N_HP > 0.0 || N_RateNeed > 0.0
         bits = WithBit(bits, USE_HP)
     EndIf
     If N_Rads > 0.0
@@ -2765,6 +2812,7 @@ Function ReadActiveEffects(Actor akPlayer)
     S_InRadIn = 0.0
     S_InAP = 0.0
     S_InDamage = 0.0
+    S_InRate = 0.0
     S_AntiradActive = false
     S_DiseaseCount = 0
     S_Diseases = ""
@@ -2854,6 +2902,9 @@ Function ReadActiveEffects(Actor akPlayer)
             ElseIf role == TR_HEAL_HP_PCT
                 S_InHeal += rest
                 S_InHealPct += rest
+                If left >= RATE_MIN_LEFT
+                    S_InRate += ae.fMagnitude
+                EndIf
             ElseIf role == TR_RADS_REMOVE
                 ; GOEPE отдаёт магнитуду RestoreRadsChem со знаком минус
                 ; (RadAway: mag=-16.0), шаг 4. Без Abs нужда по радиации росла
@@ -2872,6 +2923,9 @@ Function ReadActiveEffects(Actor akPlayer)
                 S_InAP += rest
             ElseIf role == TR_DAMAGE_HP
                 S_InDamage += rest
+                If left >= RATE_MIN_LEFT
+                    S_InRate -= ae.fMagnitude
+                EndIf
             EndIf
             If LOG_LEVEL >= LOG_TRACE && (role != TR_NONE || ae.fDuration > 0.0)
                 shown += 1
@@ -2920,6 +2974,10 @@ Function HealVariants(Form[] akItem, MagicEffect[] akBase, Float[] afElapsed, Fl
         EndWhile
         If keep
             S_InHeal += afRest[j]
+            ; Скорость — по той же группе: вариант по перку не в счёт и здесь.
+            If afMag[j] > 0.0 && afRest[j] >= afMag[j] * RATE_MIN_LEFT
+                S_InRate += afMag[j]
+            EndIf
         Else
             dropped += afRest[j]
         EndIf
@@ -3001,6 +3059,18 @@ Function BuildNeeds()
     EndIf
     N_HPTriggered = ENABLE_HEALTH && N_HPPctEff <= HEAL_TRIGGER_PCT
     N_HP = NeedHPGiven(N_Rads, 0.0)
+    ; Скорость лечения в бою (MCM CombatMinHealRatePct): объём «в полёте» может
+    ; закрывать нужду целиком (N_HP = 0), а лечит он медленно — еда в Survival
+    ; идёт 100 с. Тогда нужда — недобор скорости. Цель — % ПОЛНОГО максимума ОЗ,
+    ; порог — свой (RATE_BELOW_PCT), от того же максимума, что и порог лечения.
+    N_RateGoal = 0.0
+    N_RateNeed = 0.0
+    If MIN_RATE_PCT > 0.0 && S_InCombat && ENABLE_HEALTH && N_HPPctEff <= RATE_BELOW_PCT
+        N_RateGoal = S_MaxHP * MIN_RATE_PCT / 100.0
+        If N_RateGoal - S_InRate > RATE_EPS
+            N_RateNeed = N_RateGoal - S_InRate
+        EndIf
+    EndIf
 
     ; M16: Adamantium Skeleton 3 — конечности не калечатся, ветка выключена.
     ; В силовой броне — только если так задано в MCM (LimbsInPowerArmor).
@@ -3031,7 +3101,7 @@ Function BuildNeeds()
     ; принести радиацию (M2) — поэтому при нужде в ОЗ ищутся и средства
     ; вывода (правило RAD_CAP_WITHOUT_CURE), и еда на голод (M4).
     N_Uses = 0
-    If N_HP > 0.0
+    If N_HP > 0.0 || N_RateNeed > 0.0
         N_Uses = WithBit(N_Uses, USE_HP)
         N_Uses = WithBit(N_Uses, USE_RADS)
     EndIf
@@ -3063,11 +3133,11 @@ Function BuildNeeds()
     If N_Rads > 0.0
         N_Uses = WithBit(N_Uses, USE_HUNGER)
     EndIf
-    If N_Limbs > 0 || N_HP > 0.0
+    If N_Limbs > 0 || N_HP > 0.0 || N_RateNeed > 0.0
         N_Uses = WithBit(N_Uses, USE_THIRST)
     EndIf
     ; Запас еды считается по ВСЕЙ еде в инвентаре, а не только по лечащей.
-    If FOOD_RESERVE > 0 && (N_HP > 0.0 || N_Disease > 0 || N_Addiction > 0)
+    If FOOD_RESERVE > 0 && (N_HP > 0.0 || N_RateNeed > 0.0 || N_Disease > 0 || N_Addiction > 0)
         N_Uses = WithBit(N_Uses, USE_HUNGER)
     EndIf
 EndFunction
@@ -3545,6 +3615,7 @@ Function EvalCandidates()
     Int n = K_Forms.Length
     K_Avail = new Int[n]
     K_Heal = new Float[n]
+    K_Rate = new Float[n]
     K_RadOut = new Float[n]
     K_RadIn = new Float[n]
     K_AfterFood = new Bool[n]
@@ -3636,6 +3707,7 @@ Function EvalCandidates()
             radOut = 0.0
         EndIf
         K_Heal[k] = heal
+        K_Rate[k] = HealRate(d, heal)
         K_RadOut[k] = radOut
         K_RadIn[k] = d.RadsAdd * lead
         K_InPool[k] = Has(K_Uses[k], USE_HUNGER) && (FOOD_RESERVE_RADS || d.RadsAdd <= 0.0)
@@ -3653,6 +3725,7 @@ Function EvalCandidates()
             heal = 0.0
             radOut = 0.0
             K_Heal[k] = 0.0
+            K_Rate[k] = 0.0
             K_RadOut[k] = 0.0
             K_AP[k] = 0.0
         EndIf
@@ -3697,6 +3770,24 @@ Function EvalCandidates()
         EndIf
         k += 1
     EndWhile
+EndFunction
+
+; Скорость лечения штуки, ОЗ/с: всё лечение за длительность эффекта. Medic 4
+; укорачивает стимпак на 2 с (MedicTotal), Survival растягивает в 10 раз (A22):
+; стимпак 5 с -> 50 с, еда 10 с -> 100 с. Мгновенное лечение (Мясо гуля и т. п.)
+; скорости не прибавляет — оно уже в ОЗ.
+Float Function HealRate(AutoMedicTables:ItemData akData, Float afHeal)
+    If afHeal <= 0.0 || akData.HealSeconds <= 0.0
+        Return 0.0
+    EndIf
+    Float dur = akData.HealSeconds
+    If akData.MedicHealMag > 0.0 && S_Medic >= 4 && dur > 2.0
+        dur -= 2.0
+    EndIf
+    If S_Survival
+        dur *= SURVIVAL_DURATION_MULT
+    EndIf
+    Return afHeal / dur
 EndFunction
 
 ; Запас колы (MCM ColaReserve): COLA_RESERVE бутылок с наибольшим ИТОГОВЫМ
@@ -3756,7 +3847,9 @@ EndFunction
 ; D — болезни и зависимости (омлет лечит заодно и ОЗ), AP — ОД до 100 %
 ; (кола лечит и ОЗ — на стадии C это уже в зачёте), C — здоровье,
 ; и A' — добор вывода под радиацию, которую принесёт лечащая еда (M2):
-; тогда один антирад подметает и старую, и новую.
+; тогда один антирад подметает и старую, и новую. Последней — R, скорость
+; лечения в бою (PlanRate): после неё обрезка выкинет строки на ОЗ, объём
+; которых уже дают штуки, взятые ради скорости.
 ;
 ; Голод и жажда НЕ планируются: их закрывает замкнутый цикл шага 6 (§1.1).
 ; Планировщику от них нужно одно — закроется ли голод (M4, C_HungerWillClose).
@@ -3771,6 +3864,7 @@ Function Plan()
     P_LimitHit = false
     P_ReserveHit = false
     P_RadsUnprofitable = false
+    P_RateLimitHit = false
     If C_APLocked > 0
         P_Notes = Join(P_Notes, T("AP drinks (> ", "ОД-напитки (> ") + R0(C_APLock) + T(" AP) left alone: ", " ОД) не трогаю: ") + C_APWhy + \
             " (" + C_APLocked + T(" kinds)", " видов)"))
@@ -3786,6 +3880,7 @@ Function Plan()
         PlanRads("A'")
         PlanHealth("C'")
     EndIf
+    PlanRate()
     Trim()
     Totals(-1)
 EndFunction
@@ -3835,6 +3930,26 @@ EndFunction
 Float Function APShortfall(Int aiExcept)
     Totals(aiExcept)
     Float s = N_APNeed - T_AP
+    If s < 0.0
+        Return 0.0
+    EndIf
+    Return s
+EndFunction
+
+; Сколько ОЗ/с ещё не хватает до N_RateGoal: «в полёте» плюс скорость всех
+; строк плана (лечат все — и стимпак на конечность, и кола на ОД).
+Float Function RateShortfall(Int aiExcept)
+    If N_RateGoal <= 0.0
+        Return 0.0
+    EndIf
+    Float s = N_RateGoal - S_InRate
+    Int e = 0
+    While e < P_K.Length
+        If e != aiExcept
+            s -= K_Rate[P_K[e]]
+        EndIf
+        e += 1
+    EndWhile
     If s < 0.0
         Return 0.0
     EndIf
@@ -4180,23 +4295,7 @@ Function PlanHealth(String asStage)
     If radsNow < 0.0
         radsNow = 0.0
     EndIf
-    ; Те же ограничения, что RadsAllowed и ReserveBlocks, но на весь набор.
-    H_RadRoom = MAX_INGESTED_RADS - T_RadIn
-    H_HasCap = RAD_CAP_WITHOUT_CURE && C_RadsCount == 0
-    H_RadCap = N_RadTrigger - S_Rads - T_RadIn
-    H_HasPool = FOOD_RESERVE > 0
-    H_PoolRoom = 0
-    If H_HasPool
-        Int taken = 0
-        Int e = 0
-        While e < P_K.Length
-            If K_InPool[P_K[e]]
-                taken += 1
-            EndIf
-            e += 1
-        EndWhile
-        H_PoolRoom = C_FoodPool - taken - FOOD_RESERVE
-    EndIf
+    HealLimits()
 
     ; Кандидаты: закрытие нужды за штуку. Радиация еды опускает потолок —
     ; нужда меньше; вывод поднимает — нужда больше.
@@ -4318,6 +4417,247 @@ Function PlanHealth(String asStage)
             EndWhile
         EndIf
     EndIf
+EndFunction
+
+; Те же ограничения, что RadsAllowed и ReserveBlocks, но на весь набор
+; (стадии C и R). Ждёт свежих T_* (Totals(-1)).
+Function HealLimits()
+    H_RadRoom = MAX_INGESTED_RADS - T_RadIn
+    H_HasCap = RAD_CAP_WITHOUT_CURE && C_RadsCount == 0
+    H_RadCap = N_RadTrigger - S_Rads - T_RadIn
+    H_HasPool = FOOD_RESERVE > 0
+    H_PoolRoom = 0
+    If H_HasPool
+        Int taken = 0
+        Int e = 0
+        While e < P_K.Length
+            If K_InPool[P_K[e]]
+                taken += 1
+            EndIf
+            e += 1
+        EndWhile
+        H_PoolRoom = C_FoodPool - taken - FOOD_RESERVE
+    EndIf
+EndFunction
+
+; Стадия R: скорость лечения в бою (MCM CombatMinHealRatePct). Объём лечения
+; закрыла стадия C (или «в полёте»), а скорости не хватает — добрать штук,
+; чтобы сумма сил эффектов дошла до N_RateGoal. Набор — самый дешёвый по
+; CostOf среди добирающих (при равной цене — меньше штук); не добрать —
+; самый быстрый. Штук — не больше MAX_ITEMS_PER_NEED (решение пользователя).
+; Еда голодным не лечит (K_Rate = 0, M4), исполнение ставит её после голода.
+Function PlanRate()
+    Float need = RateShortfall(-1)
+    If need <= RATE_EPS
+        Return
+    EndIf
+    H_Slots = MAX_PLAN_ITEMS - P_K.Length
+    If H_Slots > MAX_ITEMS_PER_NEED
+        H_Slots = MAX_ITEMS_PER_NEED
+    EndIf
+    If H_Slots <= 0
+        P_RateLimitHit = true
+        Return
+    EndIf
+    Totals(-1)
+    HealLimits()
+
+    Int n = K_Forms.Length
+    Bool[] ok = new Bool[n]
+    Int m = 0
+    Int k = 0
+    While k < n
+        ok[k] = K_Rate[k] > 0.0 && LeftOf(k) > 0 && !(K_Risk[k] > 0 && Has(K_Flags[k], TF_IMMEDIATE_CHECK)) && \
+            (RATE_STIMPAK || !Has(K_Uses[k], USE_LIMBS))
+        If ok[k]
+            m += 1
+        EndIf
+        k += 1
+    EndWhile
+    If m == 0
+        Return
+    EndIf
+    H_K = new Int[m]
+    H_Cov = new Float[m]
+    H_Cost = new Float[m]
+    H_Left = new Int[m]
+    H_Pool = new Bool[m]
+    H_Rad = new Float[m]
+    H_Cur = new Int[m]
+    H_BestCur = new Int[m]
+    ; Вставками — по убыванию скорости, при равенстве дешевле раньше.
+    Int filled = 0
+    k = 0
+    While k < n
+        If ok[k]
+            Float cst = CostOf(k)
+            Int j = filled
+            While j > 0 && (H_Cov[j - 1] < K_Rate[k] || (H_Cov[j - 1] == K_Rate[k] && H_Cost[j - 1] > cst))
+                H_K[j] = H_K[j - 1]
+                H_Cov[j] = H_Cov[j - 1]
+                H_Cost[j] = H_Cost[j - 1]
+                H_Left[j] = H_Left[j - 1]
+                H_Pool[j] = H_Pool[j - 1]
+                H_Rad[j] = H_Rad[j - 1]
+                j -= 1
+            EndWhile
+            H_K[j] = k
+            H_Cov[j] = K_Rate[k]
+            H_Cost[j] = cst
+            H_Left[j] = LeftOf(k)
+            H_Pool[j] = H_HasPool && K_InPool[k]
+            H_Rad[j] = K_RadIn[k]
+            filled += 1
+        EndIf
+        k += 1
+    EndWhile
+
+    H_Goal = need - RATE_EPS
+    H_BestCls = -1
+    H_Nodes = 0
+    Float t0 = Utility.GetCurrentRealTime()
+    RateSearch(0, 0.0, 0, 0.0, 0, 0.0)
+    Float ms = (Utility.GetCurrentRealTime() - t0) * 1000.0
+    If H_BestCls < 0
+        Return
+    EndIf
+
+    Int i = 0
+    If LOG_LEVEL >= LOG_TRACE
+        String picked = ""
+        While i < m
+            If H_BestCur[i] > 0
+                picked = Join(picked, CandName(H_K[i]) + " x" + H_BestCur[i] + " (" + R1(H_Cov[i]) + T(" HP/s)", " ОЗ/с)"))
+            EndIf
+            i += 1
+        EndWhile
+        String cls = T("covered", "добран")
+        If H_BestCls == 1
+            cls = T("SHORT", "НЕДОБОР")
+        EndIf
+        P_Trace = P_Trace + "\n         RATE   R " + T("short ", "не хватает ") + R1(need) + T(" HP/s: ", " ОЗ/с: ") + picked + \
+            "  (" + cls + " +" + R1(H_BestW) + T(" HP/s; of ", " ОЗ/с; из ") + m + T(" kinds, ", " видов, ") + H_Nodes + \
+            T(" nodes, ", " узлов, ") + R0(ms) + T(" ms)", " мс)")
+    EndIf
+    i = 0
+    While i < m
+        Int c = 0
+        While c < H_BestCur[i]
+            If !AddEntry(H_K[i], NEED_HP_RATE, K_Rate[H_K[i]])
+                Return
+            EndIf
+            c += 1
+        EndWhile
+        i += 1
+    EndWhile
+    If H_BestCls == 1 && H_BestN >= H_Slots
+        P_RateLimitHit = true
+    EndIf
+EndFunction
+
+; Набор стадии R лучше текущего лучшего? Добирающий — дешевле, потом меньше
+; штук; недобор — быстрее, потом дешевле.
+Bool Function RateBetter(Int aiCls, Float afRate, Int aiN, Float afCost)
+    If H_BestCls < 0
+        Return true
+    EndIf
+    If aiCls != H_BestCls
+        Return aiCls < H_BestCls
+    EndIf
+    If aiCls == 1 && afRate != H_BestW
+        Return afRate > H_BestW
+    EndIf
+    If afCost < H_BestCost - 0.01
+        Return true
+    ElseIf afCost > H_BestCost + 0.01
+        Return false
+    EndIf
+    Return aiN < H_BestN
+EndFunction
+
+Function RateOffer(Float afRate, Int aiN, Float afCost)
+    If aiN == 0
+        Return
+    EndIf
+    Int cls = 1
+    If afRate >= H_Goal
+        cls = 0
+    EndIf
+    If RateBetter(cls, afRate, aiN, afCost)
+        H_BestCls = cls
+        H_BestW = afRate
+        H_BestN = aiN
+        H_BestCost = afCost
+        Int i = 0
+        While i < H_Cur.Length
+            H_BestCur[i] = H_Cur[i]
+            i += 1
+        EndWhile
+    EndIf
+EndFunction
+
+; Перебор как в HealSearch: тип i берётся 0..top штук, top — сколько нужно,
+; чтобы добрать скорость. Цена только растёт — ветка, уже не дешевле
+; добирающего набора, отсекается.
+Function RateSearch(Int i, Float afRate, Int aiN, Float afCost, Int aiPool, Float afRads)
+    H_Nodes += 1
+    If i >= H_K.Length || aiN >= H_Slots || H_Nodes > HEAL_NODE_BUDGET
+        RateOffer(afRate, aiN, afCost)
+        Return
+    EndIf
+    If H_BestCls == 0 && afCost >= H_BestCost - 0.01
+        Return
+    EndIf
+    Float c = H_Cov[i]
+    Int mx = H_Left[i]
+    If mx > H_Slots - aiN
+        mx = H_Slots - aiN
+    EndIf
+    If H_Pool[i] && mx > H_PoolRoom - aiPool
+        mx = H_PoolRoom - aiPool
+    EndIf
+    Float r = H_Rad[i]
+    If r > 0.0
+        Float room = H_RadRoom - afRads
+        If H_HasCap && H_RadCap - afRads - 0.001 < room
+            room = H_RadCap - afRads - 0.001
+        EndIf
+        Int byRad = 0
+        If room > 0.0
+            byRad = (room / r) as Int
+        EndIf
+        If mx > byRad
+            mx = byRad
+        EndIf
+    EndIf
+    If mx < 0
+        mx = 0
+    EndIf
+    Int top = 0
+    If afRate < H_Goal
+        top = CeilPos((H_Goal - afRate) / c)
+    EndIf
+    If top > mx
+        top = mx
+    EndIf
+    Int k = top
+    While k >= 0
+        H_Cur[i] = k
+        Float kf = k as Float
+        Float tot = afRate + kf * c
+        If k > 0 && tot >= H_Goal
+            H_Nodes += 1
+            RateOffer(tot, aiN + k, afCost + kf * H_Cost[i])
+        Else
+            Int pl = aiPool
+            If H_Pool[i]
+                pl += k
+            EndIf
+            RateSearch(i + 1, tot, aiN + k, afCost + kf * H_Cost[i], pl, afRads + kf * r)
+        EndIf
+        k -= 1
+    EndWhile
+    H_Cur[i] = 0
 EndFunction
 
 String Function ApModeName(Int aiMode)
@@ -4480,12 +4820,14 @@ Function Trim()
         Float baseHP = Math.Max(HPShortfall(-1), tolHP)
         Float baseRad = Math.Max(RadShortfall(-1), RAD_TOLERANCE)
         Float baseAP = Math.Max(APShortfall(-1), tolAP)
+        Float baseRate = Math.Max(RateShortfall(-1), RATE_EPS)
         Int drop = -1
         Float dropCost = 0.0
         Int e = 0
         While e < P_K.Length
-            If P_For[e] == NEED_HP || P_For[e] == NEED_RADS || P_For[e] == NEED_AP
-                If HPShortfall(e) <= baseHP + 0.01 && RadShortfall(e) <= baseRad + 0.01 && APShortfall(e) <= baseAP + 0.01
+            If P_For[e] == NEED_HP || P_For[e] == NEED_RADS || P_For[e] == NEED_AP || P_For[e] == NEED_HP_RATE
+                If HPShortfall(e) <= baseHP + 0.01 && RadShortfall(e) <= baseRad + 0.01 && APShortfall(e) <= baseAP + 0.01 && \
+                    RateShortfall(e) <= baseRate + 0.001
                     If drop < 0 || P_Cost[e] > dropCost
                         drop = e
                         dropCost = P_Cost[e]
@@ -4570,7 +4912,7 @@ Function WriteReport(Actor akPlayer)
     EndIf
     Log("         InFlight: heal " + R1(S_InHeal) + " HP (stimpak " + R1(S_InHealPct) + "), " + \
         "damage " + R1(S_InDamage) + ", rad out " + R1(S_InRadOut) + ", rad in " + \
-        R1(S_InRadIn) + ", AP " + R1(S_InAP) + "  (effects " + S_EffectsTotal + ")")
+        R1(S_InRadIn) + ", AP " + R1(S_InAP) + ", rate " + R1(S_InRate) + " HP/s  (effects " + S_EffectsTotal + ")")
     Log("         Perks: Medic " + S_Medic + ", LeadBelly " + S_LeadBelly + \
         ", Adamantium " + S_Adamantium + ", ChemResistant " + S_ChemResistant + \
         ", PartyBoy " + S_PartyBoy + ", Aquaboy " + S_Aquaboy + \
@@ -4581,6 +4923,9 @@ Function WriteReport(Actor akPlayer)
         "  thirst=" + R1(N_Thirst) + "  limbs=" + N_Limbs + "  disease=" + N_Disease + \
         "  addiction=" + N_Addiction + "  ap=" + R0(N_APNeed) + " (100% = " + R0(S_APFull) + \
         T(", in flight +", ", в полёте +") + R0(S_InAP) + T(", drinks ", ", напитки ") + OnOff(N_APAllowed, "") + ")")
+    If N_RateGoal > 0.0
+        Log(T("         hp-rate: need ", "         hp-rate: нужно ") + R1(N_RateGoal) + T(" HP/s (", " ОЗ/с (") + R1(MIN_RATE_PCT) +             T("% of max, combat, hp ", "% максимума, бой, ОЗ ") + R0(N_HPPctEff) + "% < " + R0(RATE_BELOW_PCT) + T("%), in flight ", "%), в полёте ") +             R1(S_InRate) + T(" -> short ", " -> не хватает ") + R1(N_RateNeed))
+    EndIf
 
     If LOG_LEVEL >= LOG_DETAILED
         WriteCandidates(akPlayer)
@@ -4740,6 +5085,7 @@ Function WritePlan()
     WritePlanNeed("addict", NEED_ADDICTION, N_Addiction > 0)
     WritePlanNeed("ap    ", NEED_AP, N_APNeed > 0.0 || PlanLines(NEED_AP) != "")
     WritePlanNeed("hp    ", NEED_HP, N_HP > 0.0 || PlanLines(NEED_HP) != "")
+    WritePlanNeed("hp-rate", NEED_HP_RATE, N_RateNeed > 0.0 || PlanLines(NEED_HP_RATE) != "")
     If N_Hunger > 0.0
         Log(T("         hunger <- loop: ", "         hunger <- цикл: ") + LoopNote(USE_HUNGER, C_HungerCount))
     EndIf
@@ -4761,6 +5107,9 @@ Function WritePlan()
         R0(EffMax(T_RadOut, T_RadIn)) + T(", plan healing ", ", лечение плана ") + R0(T_Heal) + ")  rads " + \
         R0(Math.Min(T_RadOut, radNeed)) + "/" + R0(radNeed) + T(" (plan removal ", " (вывод плана ") + R0(T_RadOut) + \
         T(", eaten +", ", съедено +") + R1(T_RadIn) + ")  ap " + R0(Math.Min(T_AP, N_APNeed)) + "/" + R0(N_APNeed))
+    If N_RateGoal > 0.0
+        Log(T("         hp-rate ", "         hp-rate ") + R1(N_RateGoal - RateShortfall(-1)) + "/" + R1(N_RateGoal) +             T(" HP/s (in flight ", " ОЗ/с (в полёте ") + R1(S_InRate) + T(" + plan)", " + план)"))
+    EndIf
     Log("  ORDER  " + OrderText())
     If ONE_ITEM
         Log(T("         one item per press: only the most urgent is taken (limbs, hp not food, ap, rads, hunger, thirst, the rest)", \
@@ -4827,6 +5176,16 @@ String Function UnmetText()
             why = T("stimpaks in reserve (", "стимпаки в резерве (") + RESERVE_STIMPAKS + ")"
         EndIf
         out = Join(out, "limbs (" + N_Limbs + "): " + why)
+    EndIf
+    Float rateLeft = RateShortfall(-1)
+    If rateLeft > RATE_EPS
+        String why = T("nothing that heals over time", "нечем лечить со временем")
+        If P_RateLimitHit
+            why = T("limit ", "лимит ") + MAX_ITEMS_PER_NEED + T(" items", " предметов")
+        ElseIf C_HPCount > 0
+            why = T("not enough healing in inventory", "лечения в инвентаре не хватило")
+        EndIf
+        out = Join(out, "hp-rate (" + R1(rateLeft) + T(" HP/s short): ", " ОЗ/с не хватает): ") + why)
     EndIf
     Float radLeft = RadShortfall(-1)
     If radLeft > RAD_TOLERANCE
@@ -5081,6 +5440,7 @@ Function Execute(Actor akPlayer)
     ; Рад-еда (M4 — только сытым) ещё и лечит: её — до перепроверки ОЗ.
     ExecutePhase(akPlayer, 5, NEED_RADS)
     ExecuteHealth(akPlayer, false)
+    ExecuteRate(akPlayer, false)
     ExecutePhase(akPlayer, 6, 0)
 EndFunction
 
@@ -5093,6 +5453,7 @@ EndFunction
 Function ExecuteOne(Actor akPlayer)
     ExecutePhase(akPlayer, 1, NEED_LIMBS)
     ExecuteHealth(akPlayer, true)
+    ExecuteRate(akPlayer, true)
     ExecutePhase(akPlayer, 1, NEED_AP)
     ExecutePhase(akPlayer, 2, 0)
     RunLoop(akPlayer, USE_HUNGER, AV_Hunger, HUNGER_TRIGGER, HUNGER_TARGET, "hunger")
@@ -5100,6 +5461,7 @@ Function ExecuteOne(Actor akPlayer)
     ExecutePhase(akPlayer, 5, NEED_AP)
     ExecutePhase(akPlayer, 5, NEED_RADS)
     ExecuteHealth(akPlayer, false)
+    ExecuteRate(akPlayer, false)
     ExecutePhase(akPlayer, 6, 0)
     If OneDone()
         LogAt(LOG_DETAILED, T("  ONE    one item per press - the rest on the next press", "  ONE    один предмет за нажатие - остальное следующим нажатием"))
@@ -5119,6 +5481,7 @@ Function InitExecution()
     E_Step = 0
     E_LoopRadIn = 0.0
     E_Unmet = ""
+    E_Rate = S_InRate
 EndFunction
 
 Function UseLine(String asText)
@@ -5169,6 +5532,7 @@ Bool Function ApplyEntry(Actor akPlayer, Int e)
         Skip(e, T("not applied (not in inventory or EquipItem refused)", "не применился (нет в инвентаре или EquipItem отказал)"))
         Return false
     EndIf
+    E_Rate += K_Rate[k]
     String what = ""
     If K_Heal[k] > 0.0
         what = Join(what, "+" + R0(K_Heal[k]) + " HP")
@@ -5404,7 +5768,7 @@ Function ExecuteHealth(Actor akPlayer, Bool abNoFood)
     While e < P_K.Length && !OneDone()
         If !E_Done[e] && P_For[e] == NEED_HP && !(abNoFood && K_AfterFood[P_K[e]])
             Int k = P_K[e]
-            If need <= tol
+            If need <= tol && !RateNeeds(e)
                 E_Done[e] = true
                 SkipLine(CandName(k) + T(" [hp]: no longer needed (need ", " [hp]: уже не нужен (нужда ") + R0(need) + T(" <= tolerance ", " <= допуск ") + R0(tol) + ")")
             ElseIf ApplyEntry(akPlayer, e)
@@ -5413,6 +5777,44 @@ Function ExecuteHealth(Actor akPlayer, Bool abNoFood)
         EndIf
         e += 1
     EndWhile
+EndFunction
+
+; Строки на скорость лечения (стадия R) — после добора ОЗ: тот могла закрыть
+; вода из цикла жажды, а скорость принятых строк уже в E_Rate. Строка не нужна,
+; если скорости хватает и без неё.
+Function ExecuteRate(Actor akPlayer, Bool abNoFood)
+    Int e = 0
+    While e < P_K.Length && !OneDone()
+        If !E_Done[e] && P_For[e] == NEED_HP_RATE && !(abNoFood && K_AfterFood[P_K[e]])
+            If E_Rate >= N_RateGoal - RATE_EPS
+                E_Done[e] = true
+                SkipLine(CandName(P_K[e]) + T(" [hp-rate]: no longer needed (rate ", " [hp-rate]: уже не нужен (скорость ") + R1(E_Rate) +                     " >= " + R1(N_RateGoal) + T(" HP/s)", " ОЗ/с)"))
+            Else
+                ApplyEntry(akPlayer, e)
+            EndIf
+        EndIf
+        e += 1
+    EndWhile
+EndFunction
+
+; Нужна ли строка e ради скорости лечения, хотя объём уже добран: без неё
+; принятое плюс ещё не исполненные строки плана не дают N_RateGoal.
+Bool Function RateNeeds(Int e)
+    If N_RateGoal <= 0.0 || K_Rate[P_K[e]] <= 0.0
+        Return false
+    EndIf
+    If !RATE_STIMPAK && Has(K_Uses[P_K[e]], USE_LIMBS)
+        Return false
+    EndIf
+    Float rate = E_Rate
+    Int j = 0
+    While j < P_K.Length
+        If j != e && !E_Done[j]
+            rate += K_Rate[P_K[j]]
+        EndIf
+        j += 1
+    EndWhile
+    Return rate < N_RateGoal - RATE_EPS
 EndFunction
 
 ; Полный максимум ОЗ сейчас. Он меняется по ходу исполнения: голод и жажда

@@ -114,7 +114,17 @@
          "help": {"en": "Off: stimpaks are never used - neither for health nor for crippled limbs.", "ru": "Выкл.: стимпаки не тратятся вообще - ни на здоровье, ни на конечности."}},
         {"type": "slider", "id": "ReserveStimpaks", "default": 2, "min": 0, "max": 20, "step": 1,
          "text": {"en": "Keep stimpaks in reserve", "ru": "Держать в запасе стимпаков"},
-         "help": {"en": "The mod never uses the last N stimpaks.", "ru": "Последние N стимпаков мод не тратит."}}
+         "help": {"en": "The mod never uses the last N stimpaks.", "ru": "Последние N стимпаков мод не тратит."}},
+        {"type": "section", "id": "SEC_HEAL_RATE", "text": {"en": "Healing speed in combat", "ru": "Скорость лечения в бою"}},
+        {"type": "slider", "id": "CombatMinHealRatePct", "default": 0.0, "min": 0.0, "max": 5.0, "step": 0.1, "float": true,
+         "text": {"en": "Minimum healing speed, % of max health per second", "ru": "Мин. скорость лечения, % макс. ОЗ в секунду"},
+         "help": {"en": "0 - off. If the healing in progress is too slow (in Survival food heals over 100 s), more items are taken to speed it up, even if the total is already enough. Same and different items add up. Stimpak 0.6-3%/s depending on Medic, food about 0.1%/s.", "ru": "0 - выкл. Если идущее лечение слишком медленное (еда в Survival лечит 100 с), принимается ещё, чтобы его ускорить, даже если объёма уже хватает. Одинаковые и разные предметы складываются. Стимпак 0,6-3 %/с по Медику, еда около 0,1 %/с."}},
+        {"type": "slider", "id": "CombatRateBelowPct", "default": 50, "min": 5, "max": 100, "step": 1,
+         "text": {"en": "Speed up healing when health is below, %", "ru": "Ускорять лечение, если ОЗ ниже, %"},
+         "help": {"en": "Percent of maximum health after radiation is removed, as for the healing thresholds. Works for presses and for the automatic mode.", "ru": "Процент от максимума ОЗ после вывода радиации, как у порогов лечения. Действует и по нажатию, и в автоматическом режиме."}},
+        {"type": "switcher", "id": "CombatRateStimpak", "default": true,
+         "text": {"en": "Use stimpaks for speed", "ru": "Стимпаки ради скорости"},
+         "help": {"en": "Off: only food and drinks are taken to speed up healing. A stimpak that is already working still counts.", "ru": "Выкл.: ради скорости берутся только еда и питьё. Уже действующий стимпак всё равно учитывается."}}
       ]
     },
     {
@@ -152,7 +162,7 @@
         {"type": "section", "id": "SEC_FOOD_LIMITS", "text": {"en": "Limits", "ru": "Ограничения"}},
         {"type": "slider", "id": "MaxItemsPerNeed", "default": 12, "min": 1, "max": 12, "step": 1,
          "text": {"en": "Max food or drink items per press", "ru": "Не больше еды или питья за нажатие"},
-         "help": {"en": "Separately for food and for drinks; healing and cures are not counted (see One item per press). Leaving Hungry may take up to 12 items.", "ru": "Отдельно для еды и для питья; лечение и лекарства не в счёт (см. «Один предмет за нажатие»). Из «Голоден» может понадобиться до 12 штук."}},
+         "help": {"en": "Separately for food, for drinks and for items taken to speed up healing in combat; other healing and cures are not counted (see One item per press). Leaving Hungry may take up to 12 items.", "ru": "Отдельно для еды, для питья и для предметов ради скорости лечения в бою; прочее лечение и лекарства не в счёт (см. «Один предмет за нажатие»). Из «Голоден» может понадобиться до 12 штук."}},
         {"type": "slider", "id": "MaxDiseaseRiskPct", "default": 7, "min": 0, "max": 12, "step": 1,
          "text": {"en": "Max disease risk of an item, %", "ru": "Макс. риск болезни у предмета, %"},
          "help": {"en": "Items with a higher disease risk are never used. Purified water 0, cooked food 1, Nuka-Cola 2, dirty water and raw meat 7, the worst items 12.", "ru": "Предметы с большим риском болезни не используются. Очищенная вода 0, готовая еда 1, ядер-кола 2, грязная вода и сырое мясо 7, худшие предметы 12."}}

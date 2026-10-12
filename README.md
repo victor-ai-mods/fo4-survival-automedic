@@ -17,6 +17,11 @@ Written for the author's own Survival playthrough; the code is public domain, ta
 - **Health.** Picks the set with the *least overheal*: with 80 HP missing, 40 + 50 beats a single
   110. Healing already in progress is counted, so a fight does not eat your whole stock of
   stimpaks (a stimpak heals over 50 seconds in Survival).
+- **Healing speed in combat** (optional, off by default): when health in combat drops below a
+  threshold (50% by default) and the healing in progress is slower than a set speed (% of
+  maximum health per second), more items are taken to speed it up, even if the total is
+  already enough. Food in Survival heals over 100 seconds; same and different items add up.
+  Stimpaks may be used for speed or not.
 - **Radiation** is handled before health, because radiation lowers your maximum health.
 - **Hunger and thirst** are closed by a loop: eat the cheapest thing, wait for the stage to
   change, repeat. No sustenance tables are needed, so it works both with vanilla rules and with

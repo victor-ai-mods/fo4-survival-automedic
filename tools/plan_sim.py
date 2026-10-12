@@ -49,8 +49,11 @@ AP_ITEMS_MODE = 1  # 0 никогда, 1 только в бою, 2 всегда 
 # колы — самые сильные по ОД бутылки (ReserveCola).
 AP_TOLERANCE_PCT = 5.0
 
-NEED_RADS, NEED_LIMBS, NEED_HP, NEED_DISEASE, NEED_ADDICTION, NEED_AP = 1, 2, 3, 4, 5, 6
-NEED_NAMES = {1: 'rads', 2: 'limbs', 3: 'hp', 4: 'disease', 5: 'addict', 6: 'ap'}
+NEED_RADS, NEED_LIMBS, NEED_HP, NEED_DISEASE, NEED_ADDICTION, NEED_AP, NEED_HP_RATE = 1, 2, 3, 4, 5, 6, 7
+NEED_NAMES = {1: 'rads', 2: 'limbs', 3: 'hp', 4: 'disease', 5: 'addict', 6: 'ap', 7: 'hp-rate'}
+# 2026-10-12: скорость лечения в бою (MCM CombatMinHealRatePct / CombatRateBelowPct /
+# CombatRateStimpak, стадия R — PlanRate). Survival растягивает лечение в 10 раз (A22).
+RATE_EPS, SURVIVAL_DURATION_MULT = 0.05, 10.0
 
 
 def has(flags, name):
@@ -120,6 +123,12 @@ class Player:
         self.in_ap = kw.get('in_ap', 0.0)         # ОД «в полёте»
         self.cola_reserve = kw.get('cola_reserve', 0)
         self.in_combat = kw.get('in_combat', False)
+        self.in_rate = kw.get('in_rate', 0.0)             # S_InRate, ОЗ/с
+        self.min_rate_pct = kw.get('min_rate_pct', 0.0)   # MCM CombatMinHealRatePct
+        self.rate_below = kw.get('rate_below', 50.0)      # MCM CombatRateBelowPct
+        self.rate_stimpak = kw.get('rate_stimpak', True)  # MCM CombatRateStimpak
+        self.max_items_per_need = kw.get('max_items_per_need', 12)
+        self.survival = kw.get('survival', True)
 
 
 class Planner:
@@ -145,6 +154,11 @@ class Planner:
         pct = p.hp * 100.0 / eff_after if eff_after > 0 else 0.0
         self.hp_triggered = pct <= HEAL_TRIGGER_PCT
         self.n_hp = self.need_hp_given(self.n_rads, 0.0)
+        self.rate_goal = self.rate_need = 0.0
+        if p.min_rate_pct > 0 and p.in_combat and pct <= p.rate_below:
+            self.rate_goal = p.max_hp * p.min_rate_pct / 100.0
+            if self.rate_goal - p.in_rate > RATE_EPS:
+                self.rate_need = self.rate_goal - p.in_rate
         self.n_limbs = p.limbs
         # ApDrinksAllowed + нужда ОД до 100 %.
         ap_pct = p.ap_pct * 100.0
@@ -259,6 +273,7 @@ class Planner:
             if c['dead']:
                 heal = rad_out = 0.0
             c['heal'], c['rad_out'], c['rad_in'] = heal, rad_out, d.get('radsAdd', 0.0) * lead
+            c['rate'] = self.heal_rate(d, heal)
             c['limbs'] = has(flags, 'FLAG_CAT_STIMPAK') and d.get('healPctOfMax', 0.0) > 0
             reserve = 0
             if c['limbs']:
@@ -268,13 +283,24 @@ class Planner:
             c['avail'] = max(0, c['count'] - reserve)
             c['ap'] = 0.0 if c['dead'] else d.get('apRestore', 0.0)
             if c['ap_locked']:
-                c['heal'] = c['rad_out'] = c['ap'] = 0.0
+                c['heal'] = c['rad_out'] = c['ap'] = c['rate'] = 0.0
                 c['avail'] = 0
             c['in_pool'] = has(flags, 'FLAG_SATES_HUNGER') and \
                 (p.food_reserve_rads or d.get('radsAdd', 0.0) <= 0)
             if rad_out > 0:
                 self.rads_count += 1
         self.reserve_cola()
+
+    def heal_rate(self, d, heal):
+        """HealRate: всё лечение за длительность (Medic 4: -2 с у стимпака, Survival x10)."""
+        dur = d.get('healSeconds', 0.0)
+        if heal <= 0 or dur <= 0:
+            return 0.0
+        if d.get('MedicHealMag', 0.0) > 0 and self.p.medic >= 4 and dur > 2:
+            dur -= 2.0
+        if self.p.survival:
+            dur *= SURVIVAL_DURATION_MULT
+        return heal / dur
 
     def reserve_cola(self):
         """ReserveCola: cola_reserve самых сильных по ОД бутылок не тратится."""
@@ -301,6 +327,7 @@ class Planner:
         if self.rad_short() > RAD_TOLERANCE and self.rads_count > 0 and                 'rads: rest unprofitable' not in self.notes:
             self.plan_rads()
             self.plan_health()
+        self.plan_rate()
         self.do_trim()
 
     def totals(self, ex=-1):
@@ -318,6 +345,12 @@ class Planner:
     def ap_short(self, ex=-1):
         got = sum(c['ap'] for i, (c, _, _) in enumerate(self.P) if i != ex)
         return max(0.0, self.n_ap - got)
+
+    def rate_short(self, ex=-1):
+        if self.rate_goal <= 0:
+            return 0.0
+        got = self.p.in_rate + sum(c['rate'] for i, (c, _, _) in enumerate(self.P) if i != ex)
+        return max(0.0, self.rate_goal - got)
 
     def rad_short(self, ex=-1):
         _, out, rin, _ = self.totals(ex)
@@ -581,18 +614,118 @@ class Planner:
                 self.heal_search(types, s, i + 1, *args)
         s['cur'][i] = 0
 
+    # --- PlanRate: скорость лечения в бою — самый дешёвый добирающий набор ---
+    def plan_rate(self):
+        need = self.rate_short()
+        self.rate_limit_hit = False
+        if need <= RATE_EPS:
+            return
+        p = self.p
+        slots = min(MAX_PLAN_ITEMS - len(self.P), p.max_items_per_need)
+        if slots <= 0:
+            self.rate_limit_hit = True
+            return
+        heal, out, rin, _ = self.totals()
+        rad_room = MAX_INGESTED_RADS - rin
+        rad_cap = None
+        if RAD_CAP_WITHOUT_CURE and self.rads_count == 0:
+            rad_cap = self.rad_trigger - p.rads - rin
+        pool_room = None
+        if p.food_reserve > 0:
+            taken = sum(1 for e in self.P if e[0]['in_pool'])
+            pool_room = self.food_pool() - taken - p.food_reserve
+        types = []
+        for c in self.k:
+            if c['rate'] <= 0 or self.left(c) <= 0:
+                continue
+            if c['risk'] > 0 and has(c['flags'], 'FLAG_IMMEDIATE_CHECK'):
+                continue
+            if not p.rate_stimpak and c['limbs']:
+                continue
+            types.append({'c': c, 'rate': c['rate'], 'cost': self.cost(c), 'left': self.left(c),
+                          'pool': c['in_pool'] and pool_room is not None, 'rad': c['rad_in']})
+        if not types:
+            return
+        types.sort(key=lambda t: (-t['rate'], t['cost']))
+        s = {'goal': need - RATE_EPS, 'slots': slots, 'rad_room': rad_room, 'rad_cap': rad_cap,
+             'pool_room': pool_room, 'cur': [0] * len(types), 'best': None, 'nodes': 0}
+        self.rate_search(types, s, 0, 0.0, 0, 0.0, 0, 0.0)
+        best = s['best']
+        if best is None:
+            return
+        self.trace.append('RATE short %.2f: %s  cls %d +%.2f HP/s, cost %.1f, %d nodes' % (
+            need, ' + '.join('%s x%d' % (types[i]['c']['name'], n) for i, n in enumerate(best[4]) if n),
+            best[0], best[1], best[3], s['nodes']))
+        for i, n in enumerate(best[4]):
+            for _ in range(n):
+                if not self.add(types[i]['c'], NEED_HP_RATE):
+                    return
+        if best[0] == 1 and best[2] >= slots:
+            self.rate_limit_hit = True
+
+    @staticmethod
+    def rate_better(a, b):
+        if b is None:
+            return True
+        if a[0] != b[0]:
+            return a[0] < b[0]
+        if a[0] == 1 and a[1] != b[1]:
+            return a[1] > b[1]
+        if abs(a[3] - b[3]) > 0.01:
+            return a[3] < b[3]
+        return a[2] < b[2]
+
+    def rate_offer(self, s, rate, n, cost):
+        if n == 0:
+            return
+        key = (0 if rate >= s['goal'] else 1, rate, n, cost)
+        if self.rate_better(key, s['best']):
+            s['best'] = key + (list(s['cur']),)
+
+    def rate_search(self, types, s, i, rate, n, cost, pool, rads):
+        s['nodes'] += 1
+        if i >= len(types) or n >= s['slots'] or s['nodes'] > self.HEAL_NODE_BUDGET:
+            self.rate_offer(s, rate, n, cost)
+            return
+        best = s['best']
+        if best is not None and best[0] == 0 and cost >= best[3] - 0.01:
+            return
+        t = types[i]
+        mx = min(t['left'], s['slots'] - n)
+        if t['pool']:
+            mx = min(mx, s['pool_room'] - pool)
+        if t['rad'] > 0:
+            room = s['rad_room'] - rads
+            if s['rad_cap'] is not None:
+                room = min(room, s['rad_cap'] - rads - 0.001)
+            mx = min(mx, int(room // t['rad']) if room > 0 else 0)
+        mx = max(0, mx)
+        need = s['goal'] - rate
+        top = min(mx, int(-(-need // t['rate'])) if need > 0 else 0)
+        for k in range(top, -1, -1):
+            s['cur'][i] = k
+            args = (rate + k * t['rate'], n + k, cost + k * t['cost'],
+                    pool + (k if t['pool'] else 0), rads + k * t['rad'])
+            if k > 0 and args[0] >= s['goal']:
+                s['nodes'] += 1
+                self.rate_offer(s, *args[:3])
+            else:
+                self.rate_search(types, s, i + 1, *args)
+        s['cur'][i] = 0
+
     def do_trim(self):
         tol_hp = self.hp_tol()
         while True:
             base_hp = max(self.hp_short(), tol_hp)
             base_rad = max(self.rad_short(), RAD_TOLERANCE)
             base_ap = max(self.ap_short(), self.ap_tol())
+            base_rate = max(self.rate_short(), RATE_EPS)
             drop = None
             for i, (c, need, cost) in enumerate(self.P):
-                if need not in (NEED_HP, NEED_RADS, NEED_AP):
+                if need not in (NEED_HP, NEED_RADS, NEED_AP, NEED_HP_RATE):
                     continue
                 if self.hp_short(i) <= base_hp + 0.01 and self.rad_short(i) <= base_rad + 0.01 and \
-                        self.ap_short(i) <= base_ap + 0.01:
+                        self.ap_short(i) <= base_ap + 0.01 and self.rate_short(i) <= base_rate + 0.001:
                     if drop is None or cost > self.P[drop][2]:
                         drop = i
             if drop is None:
@@ -622,6 +755,9 @@ class Planner:
         lines.append('  COVER hp %d/%d (heal %d), rads %d/%d (+%.1f eaten)  short hp %d rad %d' % (
             min(heal, self.need_hp_given(out, rin)), self.need_hp_given(out, rin), heal,
             min(out, self.need_rads(rin)), self.need_rads(rin), rin, self.hp_short(), self.rad_short()))
+        if self.rate_goal > 0:
+            lines.append('  RATE %.2f/%.2f HP/s (in flight %.2f)' % (
+                self.rate_goal - self.rate_short(), self.rate_goal, self.p.in_rate))
         if self.notes:
             lines.append('  NOTE ' + '; '.join(self.notes))
         return '\n'.join(lines)
@@ -768,6 +904,41 @@ SCENARIOS = [
      dict(hp=299, medic=3, bobble=True),
      {'Stimpak': 10, 'Mirelurk Cake': 2, 'Vegetable Soup': 3, 'Cram': 5},
      {('Mirelurk Cake', 'hp'): 1, ('Vegetable Soup', 'hp'): 1}),
+    # --- 2026-10-12: скорость лечения в бою (стадия R) ---
+    # Максимум 480. Стимпак 144 ОЗ за 50 с = 2.88 ОЗ/с (0.6 %/с), кротокрыс 50 за
+    # 100 с = 0.5, вода 0.4. Цель 1 %/с = 4.8 ОЗ/с.
+    ('R1. Бой, ОЗ 30 %, объём «в полёте» есть (еда 0.4/с) — добрать скорость',
+     # Не хватает 4.4. Стимпак 48+5+10/5 = 55, кротокрыс 8+5+риск 1 % x5+10/10 = 19.
+     # Два стимпака (5.76) — 110; стимпак + кротокрыс x3 (4.38) — 112; кротокрыс x9 — 171.
+     dict(hp=144, in_heal=400, in_rate=0.4, in_combat=True, min_rate_pct=1.0),
+     {'Stimpak': 5, 'Mole Rat Chunks': 10},
+     {('Stimpak', 'hp-rate'): 2}),
+    ('R2. То же, стимпаки ради скорости выкл. — кротокрыс x9',
+     dict(hp=144, in_heal=400, in_rate=0.4, in_combat=True, min_rate_pct=1.0, rate_stimpak=False),
+     {'Stimpak': 5, 'Mole Rat Chunks': 10},
+     {('Mole Rat Chunks', 'hp-rate'): 9}),
+    ('R3. То же, лимит 4 штуки — недобор, самый быстрый набор',
+     dict(hp=144, in_heal=400, in_rate=0.4, in_combat=True, min_rate_pct=1.0, rate_stimpak=False,
+          max_items_per_need=4),
+     {'Stimpak': 5, 'Mole Rat Chunks': 10},
+     {('Mole Rat Chunks', 'hp-rate'): 4}),
+    ('R4. Не в бою — правило скорости не действует',
+     dict(hp=144, in_heal=400, in_rate=0.4, min_rate_pct=1.0),
+     {'Stimpak': 5, 'Mole Rat Chunks': 10}, {}),
+    ('R5. Бой, ОЗ 60 % — выше порога скорости 50 %',
+     dict(hp=288, in_heal=200, in_rate=0.4, in_combat=True, min_rate_pct=1.0),
+     {'Stimpak': 5, 'Mole Rat Chunks': 10}, {}),
+    ('R6. Бой, ОЗ 30 %, ничего «в полёте»: объём (стимпак x2 + вода) даёт и скорость',
+     # Как ситуация 1: 2 x 2.88 + 0.4 = 6.16 >= 4.8 — стадии R добирать нечего.
+     dict(hp=144, in_combat=True, min_rate_pct=1.0), BASE_INV,
+     {('Stimpak', 'hp'): 2, ('Purified Water', 'hp'): 1}),
+    ('R7. Бой, ОЗ 30 %, цель 2 %/с (9.6): объём стимпак x2 + вода, скорость — стимпак + Chops',
+     # 6.16 из 9.6, не хватает 3.44: третий стимпак (2.88) + Mutant Hound Chops (60 ОЗ
+     # за 100 с = 0.6) = 3.48, cost 83.3 — дешевле двух стимпаков. Объём уже добран —
+     # строки hp не выкидываются: без них не хватит скорости.
+     dict(hp=144, in_combat=True, min_rate_pct=2.0), BASE_INV,
+     {('Stimpak', 'hp'): 2, ('Purified Water', 'hp'): 1,
+      ('Stimpak', 'hp-rate'): 1, ('Mutant Hound Chops', 'hp-rate'): 1}),
 ]
 
 
