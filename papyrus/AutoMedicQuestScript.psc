@@ -19,6 +19,11 @@ FormList Property AM_AllConsumables Auto Const Mandatory
 AutoMedicTables Property AM_Tables Auto Const Mandatory
 ; Шаг 7: настройки MCM — на своём квесте AM_Settings (см. AutoMedicSettings).
 AutoMedicSettings Property AM_Settings Auto Const Mandatory
+; 1.5.0: самопроверка F4SE / GOEPE — третий скрипт на этом же квесте.
+AutoMedicCheck Property AM_Check Auto Const Mandatory
+; Итог проверки на последней загрузке (Refresh). true по умолчанию: у сейва
+; с 1.4.0 таймер может сработать раньше Refresh — не рвать ему цепочку зря.
+Bool AM_SetupOK = true
 
 ; §5: скорость набора радиации для Рад-X и антидребезг автоматического режима.
 ; PapyrusUtil / StorageUtil не установлены, поэтому это обычные GlobalVariable.
@@ -1186,6 +1191,17 @@ EndEvent
 ; фазы 0 и следит за тем, чтобы предмет-инструмент был у игрока.
 Function Refresh(Bool abForce)
     Log(T("Language: English (sLanguage=", "Язык: русский (sLanguage=") + AM_Lang + ")")
+    ; Сейвы с 1.4.0 и раньше: подписать проверку на загрузки (и показать её сейчас).
+    AM_Check.EnsureRegistered()
+    AM_SetupOK = AM_Check.Status() == AM_Check.STATUS_OK
+    Log(T("Setup: ", "Установка: ") + AM_Check.Summary())
+    If !AM_SetupOK
+        ; Окно уже показал AutoMedicCheck. Таблицы и таймеры — после починки,
+        ; на следующей загрузке; предмет выдаём, чтобы нажатие объяснило, в чём дело.
+        GiveToolOnce()
+        FlushLog()
+        Return
+    EndIf
     If !AM_Tables.IsBuilt() || abForce
         Float started = Utility.GetCurrentRealTime()
         AM_Tables.BuildTables(abForce)
@@ -1386,6 +1402,11 @@ EndFunction
 ; Вызывается из AutoMedicScript. Сам цикл уходит в CallFunctionNoWait, чтобы
 ; эффект предмета закончился сразу, а не висел, пока идёт сбор состояния.
 Function OnToolUsed(Actor akUser)
+    ; Нет F4SE / GOEPE — окно с объяснением вместо цикла; Survival выкл. или
+    ; нет MCM — уведомление раз за сессию, цикл идёт дальше.
+    If !AM_Check.CheckOnUse()
+        Return
+    EndIf
     ; Любое нажатие обрывает наблюдение от предыдущего.
     AM_WatchToken += 1
     Int mode = AM_TestMode.GetValueInt()
@@ -1752,6 +1773,11 @@ EndFunction
 
 ; Опрос. Таймер перезапускается ПЕРВЫМ делом: ошибка ниже не должна рвать цепочку.
 Event OnTimer(Int aiTimerID)
+    ; Таймеры едут в сейве. Без F4SE / GOEPE цепочку обрываем: Refresh
+    ; запустит её заново на первой загрузке с рабочей установкой.
+    If !AM_SetupOK
+        Return
+    EndIf
     If aiTimerID == TIMER_RADX
         RadXPoll()
         Return

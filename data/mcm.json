@@ -5,6 +5,13 @@
   "fallback": "en",
   "displayName": {"en": "Survival AutoMedic", "ru": "Survival AutoMedic"},
   "about": {
+    "quickStart": {
+      "section": {"en": "Quick start", "ru": "Быстрый старт"},
+      "text": {
+        "en": "Nothing to set up - the defaults work. Use the AutoMedic item (Aid tab) or put it on a favorites hotkey: one press treats everything that needs it. To be treated without any presses, switch on Automatic mode on its page and leave the rest as is.",
+        "ru": "Настраивать ничего не нужно - значения по умолчанию рабочие. Примените предмет AutoMedic (вкладка «Помощь») или назначьте его на быструю клавишу: одно нажатие лечит всё, что нужно. Чтобы мод лечил без нажатий, включите «Автоматический режим» на его странице, остальное не трогайте."
+      }
+    },
     "section": {"en": "Survival AutoMedic", "ru": "Survival AutoMedic"},
     "text": {
       "en": "Use the AutoMedic item (Aid tab) or its favorites hotkey: the mod reads your hunger, thirst, health, radiation, crippled limbs, diseases and addictions, picks a set of items from your inventory that covers them - the cheapest food and water, healing with the least overheal - and takes it in one go. Settings are read at every press - changes apply immediately.",

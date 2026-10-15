@@ -9,7 +9,7 @@
     GLOB  AM_RadRateLastSample, AM_RadRateLastTime, AM_LastAutoRunTime   (§5)
     MGEF  AM_UseEffect      — архетип Script + VMAD на AutoMedicScript
     ALCH  AM_Tool           — сам предмет-инструмент, единственный эффект = AM_UseEffect
-    QUST  AM_Quest          — Start Game Enabled, два скрипта в VMAD
+    QUST  AM_Quest          — Start Game Enabled, три скрипта в VMAD
     QUST  AM_Settings       — настройки MCM (шаг 7), один скрипт AutoMedicSettings
     FLST  AM_AllConsumables — пустой, наполняется на OnQuestInit
 
@@ -68,6 +68,7 @@ SCRIPT_EFFECT = 'AutoMedicScript'
 SCRIPT_QUEST = 'AutoMedicQuestScript'
 SCRIPT_TABLES = 'AutoMedicTables'
 SCRIPT_SETTINGS = 'AutoMedicSettings'
+SCRIPT_CHECK = 'AutoMedicCheck'
 
 ITEM_NAME = 'AutoMedic'
 ITEM_DESC = ('Survival AutoMedic: eat, drink, heal, cleanse and cure in one press. '
@@ -151,13 +152,16 @@ def build_qust():
     # отдаёт его как AutoMedicTables.
     quest_script.prop('AM_Tables', PROP_OBJECT, FID_QUST_MAIN)
     quest_script.prop('AM_Settings', PROP_OBJECT, FID_QUST_SETTINGS)
+    # 1.5.0: самопроверка F4SE / GOEPE — третий скрипт этого же квеста, без
+    # единого типа GOEPE, чтобы загрузиться даже без его файлов.
+    quest_script.prop('AM_Check', PROP_OBJECT, FID_QUST_MAIN)
 
     tables_script = Script(SCRIPT_TABLES)
     tables_script.prop('AM_AllConsumables', PROP_OBJECT, FID_FLST_ITEMS)
     for form_id, edid in NEED_LISTS:
         tables_script.prop(edid, PROP_OBJECT, form_id)
 
-    r.add(b'VMAD', vmad([quest_script, tables_script]))
+    r.add(b'VMAD', vmad([quest_script, tables_script, Script(SCRIPT_CHECK)]))
     r.add(b'FULL', zstring('Survival AutoMedic'))
     # DNAM: флаги(u16) приоритет(u8) не используется(u8) + два u32.
     # 0x0111 = Start Game Enabled | 0x0010 | Run Once — как у квеста-инициализатора

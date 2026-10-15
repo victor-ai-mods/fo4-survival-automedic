@@ -25,6 +25,7 @@
     <Scripts>
         <Script>AutoMedicTables</Script>
         <Script>AutoMedicSettings</Script>
+        <Script>AutoMedicCheck</Script>
         <Script>AutoMedicQuestScript</Script>
         <Script>AutoMedicScript</Script>
     </Scripts>

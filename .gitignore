@@ -18,6 +18,7 @@ docs/GOEPE/
 # Ванильный исходник Bethesda с дописанным объявлением F4SE (как его получить —
 # build/f4se_stubs/README.md)
 build/f4se_stubs/ObjectReference.psc
+build/f4se_stubs/Form.psc
 
 # Логи мода и игры, временные файлы
 *.log

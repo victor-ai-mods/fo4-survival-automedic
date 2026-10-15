@@ -223,15 +223,25 @@ class Builder:
                 'pageDisplayName': self.token(page['id'], page['text'], page['id']),
                 'content': [self.element(item, page['id']) for item in page['content']],
             })
+        content = []
+        # 1.5.0: «Быстрый старт» — первым на стартовой странице мода.
+        quick = about.get('quickStart')
+        if quick:
+            content += [
+                {'type': 'section', 'text': self.token('QUICK_START', quick['section'], 'about quickStart')},
+                {'type': 'text', 'text': self.token('QUICK_START_TEXT', quick['text'], 'about quickStart text')},
+                {'type': 'spacer'},
+            ]
+        content += [
+            {'type': 'section', 'text': self.token('ABOUT', about['section'], 'about')},
+            {'type': 'text', 'text': self.token('ABOUT_TEXT', about['text'], 'about text')},
+        ]
         return {
             'modName': spec['modName'],
             'displayName': self.token('MOD_NAME', spec['displayName'], 'displayName'),
             'minMcmVersion': 2,
             'pluginRequirements': [PLUGIN_NAME],
-            'content': [
-                {'type': 'section', 'text': self.token('ABOUT', about['section'], 'about')},
-                {'type': 'text', 'text': self.token('ABOUT_TEXT', about['text'], 'about text')},
-            ],
+            'content': content,
             'pages': pages,
         }
 

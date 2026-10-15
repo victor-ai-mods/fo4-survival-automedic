@@ -57,6 +57,9 @@ and its Nukalurk Egg; without it, the vanilla numbers stay.
 - [Mod Configuration Menu](https://www.nexusmods.com/fallout4/mods/21497)
 - [Garden of Eden Papyrus Script Extender](https://www.nexusmods.com/fallout4/mods/74160)
 
+If F4SE or Garden of Eden is missing (or built for another game version), AutoMedic says so in a
+message box when a save loads and when you use the item, instead of silently doing nothing.
+
 **No DLC required.** Items from DLC you own are supported; items from DLC you do not own are
 skipped silently. One plugin, one master (`Fallout4.esm`).
 

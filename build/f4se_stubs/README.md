@@ -15,6 +15,15 @@
    Form[] Function GetInventoryItems() native
    ```
 
+Так же (1.5.0, самопроверка `AutoMedicCheck`) — `Form.psc`: скопировать ванильный
+`<игра>\Data\Scripts\Source\Base\Form.psc` и дописать последней строкой
+
+   ```papyrus
+   String Function GetName() native
+   ```
+
+`F4SE.psc` лежит в репозитории: это не ванильный файл, а четыре объявления функций версии F4SE.
+
 `build/compile.ppj` импортирует эту папку первой, поэтому компилятор берёт именно её копию
 `ObjectReference`. Комментарий внутри `<Imports>` компилятор не принимает.
 

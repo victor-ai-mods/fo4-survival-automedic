@@ -42,6 +42,7 @@
 | `Scripts\AutoMedicQuestScript.pex` | вся логика: цикл, планировщик, исполнение, авторежим, профилактика, лог |
 | `Scripts\AutoMedicTables.pex` | сгенерированная таблица предметов (352 ALCH ваниль + 6 DLC и 1 предмет UFO4P, 159 вариантов по перкам), ролей эффектов и слой исправлений UFO4P (37 строк, 50 вариантов по перкам) |
 | `Scripts\AutoMedicSettings.pex` | свойства MCM (генерируется из `data/mcm.json`) |
+| `Scripts\AutoMedicCheck.pex` | самопроверка установки: F4SE, GOEPE, Survival, MCM (1.5.0, §3a) |
 | `MCM\Config\SurvivalAutoMedic\config.json` | MCM, все тексты — токены `$AM_*` |
 | `Interface\Translations\SurvivalAutoMedic_{en,ru}.txt` | переводы MCM (UTF-16 LE + BOM, TAB) |
 | `SurvivalAutoMedic\exclusions-default.json` | список исключений, идёт с модом |
@@ -52,7 +53,7 @@
 |---|---|---|
 | `xx000804` | ALCH `AM_Tool` «AutoMedic» | предмет-инструмент на вкладке «Помощь». Ключевые слова `ObjectTypeStimpak` и `HC_IgnoreAsFood` (иначе Survival засчитывал бы его как еду или стимпак) |
 | `xx000803` | MGEF `AM_UseEffect` | эффект типа Script со скриптом `AutoMedicScript` |
-| `xx000805` | QUST `AM_Quest` | Start Game Enabled; скрипты `AutoMedicQuestScript` и `AutoMedicTables` |
+| `xx000805` | QUST `AM_Quest` | Start Game Enabled; скрипты `AutoMedicQuestScript`, `AutoMedicTables` и `AutoMedicCheck` |
 | `xx000808` | QUST `AM_Settings` | скрипт `AutoMedicSettings`, его свойства читает и пишет MCM |
 | `xx000806` | FLST `AM_AllConsumables` | в esp пустой, наполняется при сборке таблицы |
 | `xx000807` | GLOB `AM_TestMode` | режим нажатия, меняется из консоли (§11) |
@@ -85,7 +86,9 @@
 
 ## 3. Жизненный цикл
 
-`OnQuestInit` и каждая загрузка сохранения (`OnPlayerLoadGame`) вызывают `Refresh`. Он:
+`OnQuestInit` и каждая загрузка сохранения (`OnPlayerLoadGame`) вызывают `Refresh`. Он первым делом
+спрашивает самопроверку (§3a); если F4SE или GOEPE не отвечают — только выдаёт предмет и выходит
+(ни таблицы, ни таймеров; уже идущие таймеры из сейва гаснут на первом срабатывании). Иначе:
 
 1. Пересобирает таблицу (`AutoMedicTables.BuildTables`), только если сменилась `DATA_VERSION`
    (crc32 сгенерированного скрипта) или набор установленных плагинов-исправлений (UFO4P). Сборка — около 6 с, один раз; результат уезжает в сейв.
@@ -97,6 +100,28 @@
 5. Один раз за всю игру кладёт предмет AutoMedic в инвентарь. Если его потерять, вернуть
    можно кнопкой в MCM.
 6. Запускает таймеры авторежима и Рад-Х, подписывается на `OnSit` и `OnItemEquipped` игрока и на открытие `SleepWaitMenu`.
+
+## 3a. Самопроверка (`AutoMedicCheck`, 1.5.0)
+
+Раньше без F4SE или GOEPE мод молчал: их функции тихо возвращают 0 / `None`, а без файлов GOEPE
+основной скрипт, скорее всего, не загружается вовсе (в нём есть тип `GardenOfEden3:ActiveEffectData`) —
+нет ни предмета, ни сообщений. Поэтому проверка — отдельный скрипт на том же квесте без единого
+типа F4SE / GOEPE / MCM, только статические вызовы (без расширения они возвращают 0 или "").
+
+- `GardenOfEden.GetVersionRelease() > 0` — всё в порядке (GOEPE — плагин F4SE, значит и F4SE есть).
+- Иначе `F4SE.GetVersionRelease() <= 0` — «F4SE не запущен» (или нет его `Data\Scripts`).
+- Иначе — «GOEPE не загружен»: не установлен или сборка не под эту версию игры. В окне —
+  версия игры (`Debug.GetVersionNumber`) и какие версии поддерживает основной файл GOEPE.
+
+Окно (`Debug.MessageBox`) — на каждой загрузке и при каждом применении предмета; цикл тогда не
+запускается. Мягкие уведомления — при первом применении предмета за сессию: Survival выключен
+(`HC_Rule_SustenanceEffects` != 1 — голод, жажда и болезни не учитываются) и нет MCM
+(`MCM.IsInstalled()`). Язык — `sLanguage` через GOEPE, без него — по имени стимулятора через
+F4SE (`Стимулятор` → русский), иначе английский. Строка `Установка: game …, F4SE …, GOEPE …` —
+в лог на каждой загрузке.
+
+Подписка на загрузки: у новой игры — из `OnQuestInit` самой проверки, у сейвов с 1.4.0 и раньше —
+из `Refresh` основного скрипта (`EnsureRegistered`; первая подписка сразу показывает проверку).
 
 ## 4. Что запускает цикл
 

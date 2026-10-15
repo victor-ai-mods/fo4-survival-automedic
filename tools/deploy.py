@@ -22,7 +22,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 GAME = os.environ.get('FO4_PATH', r'D:\Games\Fallout 4')
 PLUGIN = 'SurvivalAutoMedic.esp'
 SCRIPTS = ['AutoMedicTables.pex', 'AutoMedicSettings.pex', 'AutoMedicQuestScript.pex',
-           'AutoMedicScript.pex']
+           'AutoMedicScript.pex', 'AutoMedicCheck.pex']
 # Шаг 7: MCM и переводы — из build/mcm (собирает tools/gen_mcm.py), пути как в Data.
 MCM_ROOT = os.path.join(ROOT, 'build', 'mcm')
 
