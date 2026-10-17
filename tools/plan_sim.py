@@ -955,12 +955,23 @@ SCENARIOS = [
      dict(hp=400, ap_base=110.0, ap_max=110.0, use_food_packaged=False),
      {'Cram': 5, 'Nuka-Cola': 5},
      {('Nuka-Cola', 'hp'): 4}),
-    ('F2. Сырое выкл.: нетронутое яйцо когтя смерти (ингредиент омлета) не тратится',
-     # Включено — два яйца на нужду 96. Слова риска болезни у яйца нет: сырое оно
-     # только по рецепту станции готовки.
-     dict(hp=384, use_food_raw=False), {'Pristine Deathclaw Egg': 5}, {}),
     ('F3. Растения выкл. при выключенном файле исключений: Tato и Carrot не трогаются',
      dict(hp=384, use_exclusions=False, use_food_plants=False), {'Tato': 5, 'Carrot': 5}, {}),
+]
+
+
+# Отбор кандидатов: (заголовок, Player, предмет, причина исключения; '' — кандидат).
+# Сырое мясо на ОЗ планировщик не выбирает и так (дорого по риску), поэтому
+# тумблер сырого проверяется здесь, а не ситуацией.
+FOOD_OFF = dict(use_food_packaged=False, use_food_plants=False, use_food_raw=False)
+EXCLUSION_CASES = [
+    ('E1. Сырое выкл.: мясо брамина', dict(use_food_raw=False), 'Brahmin Meat', 'raw food off'),
+    ('E2. Сырое вкл.: мясо брамина — кандидат (риск 7 не выше 7)', {}, 'Brahmin Meat', ''),
+    ('E3. Довоенное выкл.: Cram', dict(use_food_packaged=False), 'Cram', 'pre-war food off'),
+    ('E4. Всё выкл.: приготовленное остаётся', FOOD_OFF, 'Mole Rat Chunks', ''),
+    ('E5. Всё выкл.: Ядер-кола остаётся', FOOD_OFF, 'Nuka-Cola', ''),
+    ('E6. Нетронутое яйцо когтя смерти (квест Веллингема) — чёрный список', {},
+     'Pristine Deathclaw Egg', 'blacklist'),
 ]
 
 
@@ -981,7 +992,14 @@ def main():
         if expected is not None and got != expected:
             print('  ожидалось: %s' % expected)
         print()
-    print('итог: %d ситуаций, расхождений %d' % (len(SCENARIOS), failed))
+    for title, player, name, expected in EXCLUSION_CASES:
+        planner = Planner(table, Player(**player), {name: 1})
+        got = dict(planner.excluded).get(name, '')
+        if got != expected:
+            failed += 1
+        print('%s  [%s]' % (title, 'OK' if got == expected else 'РАЗНИЦА: %r' % got))
+    print('итог: %d ситуаций и %d проверок отбора, расхождений %d'
+          % (len(SCENARIOS), len(EXCLUSION_CASES), failed))
 
 
 if __name__ == '__main__':
