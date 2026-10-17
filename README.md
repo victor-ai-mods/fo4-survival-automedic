@@ -68,7 +68,12 @@ skipped silently. One plugin, one master (`Fallout4.esm`).
 Everything is in MCM, on eight pages: what to treat, automatic mode, health, hunger and thirst,
 radiation, prevention, items, diagnostics. Thresholds, reserves ("never spend my last two
 stimpaks"), a food reserve, a cap on how much radiation may be eaten, disease-risk limits,
+switches for kinds of food (pre-war and packaged, crops and wild plants, raw meat and eggs),
 per-item exclusion lists, and a diagnostic log with three levels of detail.
+
+The kind of food is worked out offline from the game's cooking recipes: what a cooking
+station makes is cooked (never switched off), what it takes to cook food is raw, and so is
+food with a Survival disease-risk keyword. Nuka-Cola and alcohol are not food kinds.
 
 Settings are read at the start of every cycle, so changes apply immediately.
 
@@ -81,7 +86,8 @@ Papyrus cannot read an item's effects, so consumables from other mods are added 
 `Data\SurvivalAutoMedic\items-user.json` (see `items-user.example.json` next to it), one
 per line: `"Plugin.esp|ID|heal=110|sec=10|rads=15"`. You write the numbers (`heal`, `healpct`,
 `sec`, `rads`, `radsout`, `ap`, `risk`) and flags the item cannot show (`disease`,
-`addiction`, `buff`, `addictive`); hunger, thirst, category and disease risk are read from
+`addiction`, `buff`, `addictive`, and `raw` or `packaged` for the food switches); hunger,
+thirst, category and disease risk are read from
 the item's keywords. An entry for an item the mod already knows replaces its numbers. With
 the log at Detailed, items in your inventory that the mod does not know are listed as ready
 `Plugin.esp|ID` entries.

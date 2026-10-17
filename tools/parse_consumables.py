@@ -114,6 +114,67 @@ BLACKLIST_EDIDS = {
 HERBAL_EDID_PREFIX = 'HC_Herbal'
 
 
+# Вид еды для тумблеров MCM «Виды еды» (2026-10-17, просьба с Nexus: не есть
+# довоенное, урожай и сырое, не трогая колу). Ключевого слова «довоенная еда» в
+# игре нет, поэтому вид выводится из рецептов станции готовки (COBJ с
+# BNAM = WorkbenchCooking): что она делает — приготовленное, что она берёт для
+# готовки еды — сырое. Довоенное — вся остальная еда, не растение: её находят
+# готовой (Sugar Bombs, Cram, InstaMash, пакеты еды Института). Химлаб не в счёт:
+# Contraptions делает там Cram и Pork n' Beans, а это всё равно довоенная еда.
+COOKING_BENCH = 'WorkbenchCooking'
+KW_RAW_FOOD = ('HC_DiseaseRisk_FoodHigh', 'HC_DiseaseRisk_FoodStandard')
+
+
+def cooking_recipes(plugins, keyword_names):
+    """[(созданный предмет, [компоненты])] рецептов станции готовки; поздний плагин главнее."""
+    out = []
+    for key, (plugin, rec) in collect(plugins, b'COBJ').items():
+        created, bench, parts = None, None, []
+        for tag, payload in rec.subrecords():
+            if tag == b'CNAM' and len(payload) >= 4:
+                created = gkey(plugin, struct.unpack_from('<I', payload)[0])
+            elif tag == b'BNAM' and len(payload) >= 4:
+                bench = gkey(plugin, struct.unpack_from('<I', payload)[0])
+            elif tag == b'FVPA':
+                for i in range(0, len(payload) - 7, 8):
+                    parts.append(gkey(plugin, struct.unpack_from('<I', payload, i)[0]))
+        if created and keyword_names.get(bench) == COOKING_BENCH:
+            out.append((created, parts))
+    return out
+
+
+def is_plain_food(item):
+    """Еда без колы и алкоголя: у тех свои тумблеры, «Виды еды» их не касаются."""
+    cats = item['catFlags']
+    return 'Food' in cats and 'Cola' not in cats and 'Alcohol' not in cats
+
+
+def assign_food_types(items, recipes):
+    """
+    foodType каждой еды: plant / cooked / raw / packaged (None — не еда).
+
+    Растение — FruitOrVegetable или дикое (HC_IgnoreAsFood). Сырое — ингредиент
+    рецепта готовки ЕДЫ (Bubblegum и Dandy Boy Apples идут только в Vim — это не
+    сырьё) или слово риска болезни Survival у еды (сырое мясо, яйца, Potted
+    Meat). Порядок проверок и есть приоритет.
+    """
+    cooked = {created for created, _ in recipes}
+    raw = {part for created, parts in recipes
+           if created in items and is_plain_food(items[created]) for part in parts}
+    for key, item in items.items():
+        if not is_plain_food(item):
+            kind = None
+        elif 'FruitOrVegetable' in item['catFlags'] or item['isWildPlant']:
+            kind = 'plant'
+        elif key in cooked:
+            kind = 'cooked'
+        elif key in raw or any(k in KW_RAW_FOOD for k in item['keywords']):
+            kind = 'raw'
+        else:
+            kind = 'packaged'
+        item['foodType'] = kind
+
+
 def is_wild_plant(sustenance, categories, is_herbal):
     """
     §2.3 M4.1: «дикое растение» — голод не утоляет, но баф даёт даже голодному.
@@ -694,6 +755,7 @@ def build_items(plugins, names_en, names_ru):
     mgef_index = build_mgef_index(plugins, avif_names)
     items = parse_consumables(plugins, mgef_index, keyword_names, names_en, names_ru,
                               global_names, perk_names)
+    assign_food_types(items, cooking_recipes(plugins, keyword_names))
     return items, mgef_index
 
 

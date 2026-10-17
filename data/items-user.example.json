@@ -12,6 +12,7 @@
     "_comment": "Flags, for what the item does but the mod cannot see:",
     "_comment": "  disease      cures diseases        addiction  cures addictions",
     "_comment": "  buff         gives a timed buff    addictive  can cause an addiction",
+    "_comment": "  raw          raw meat or eggs      packaged   pre-war or packaged food (for the Food types switches)",
     "_comment": "Hunger, thirst, food/drink/chem/alcohol and the disease risk are read from the item's keywords - no need to write them.",
     "_comment": "An entry for an item that the mod already knows (vanilla, DLC, UFO4P) replaces its numbers - useful if another mod changed that item.",
     "_comment": "Up to 128 items. Reload in MCM: Items - Reload your items. With the log on (Detailed) every entry is logged with what the mod understood from it.",

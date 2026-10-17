@@ -117,6 +117,10 @@ class Player:
         self.food_reserve = kw.get('food_reserve', 0)
         self.food_reserve_rads = kw.get('food_reserve_rads', True)
         self.use_exclusions = kw.get('use_exclusions', True)
+        # MCM «Виды еды» (2026-10-17)
+        self.use_food_packaged = kw.get('use_food_packaged', True)
+        self.use_food_plants = kw.get('use_food_plants', True)
+        self.use_food_raw = kw.get('use_food_raw', True)
         self.ap_pct = kw.get('ap_pct', 1.0)       # GetValuePercentage(AP)
         self.ap_base = kw.get('ap_base', 90.0)    # GetBaseValue(AP)
         self.ap_max = kw.get('ap_max', self.ap_base)  # текущий максимум (S_APFull)
@@ -212,6 +216,13 @@ class Planner:
                 why = 'chem'
             elif not USE_ALCOHOL and has(flags, 'FLAG_CAT_ALCOHOL'):
                 why = 'alcohol'
+            elif not self.p.use_food_packaged and has(flags, 'FLAG_FOOD_PACKAGED'):
+                why = 'pre-war food off'
+            elif not self.p.use_food_plants and (has(flags, 'FLAG_CAT_FRUIT_VEG')
+                                                 or has(flags, 'FLAG_WILD_PLANT')):
+                why = 'plants off'
+            elif not self.p.use_food_raw and has(flags, 'FLAG_FOOD_RAW'):
+                why = 'raw food off'
             elif d['diseaseRiskPct'] > MAX_DISEASE_RISK_PCT:
                 why = 'risk'
             elif MAX_ITEM_VALUE > 0 and d['value'] > MAX_ITEM_VALUE:
@@ -939,6 +950,17 @@ SCENARIOS = [
      dict(hp=144, in_combat=True, min_rate_pct=2.0), BASE_INV,
      {('Stimpak', 'hp'): 2, ('Purified Water', 'hp'): 1,
       ('Stimpak', 'hp-rate'): 1, ('Mutant Hound Chops', 'hp-rate'): 1}),
+    # --- 2026-10-17: виды еды (MCM «Виды еды») ---
+    ('F1. Довоенная еда выкл.: Cram не тратится, Ядер-кола лечит как в 22a',
+     dict(hp=400, ap_base=110.0, ap_max=110.0, use_food_packaged=False),
+     {'Cram': 5, 'Nuka-Cola': 5},
+     {('Nuka-Cola', 'hp'): 4}),
+    ('F2. Сырое выкл.: нетронутое яйцо когтя смерти (ингредиент омлета) не тратится',
+     # Включено — два яйца на нужду 96. Слова риска болезни у яйца нет: сырое оно
+     # только по рецепту станции готовки.
+     dict(hp=384, use_food_raw=False), {'Pristine Deathclaw Egg': 5}, {}),
+    ('F3. Растения выкл. при выключенном файле исключений: Tato и Carrot не трогаются',
+     dict(hp=384, use_exclusions=False, use_food_plants=False), {'Tato': 5, 'Carrot': 5}, {}),
 ]
 
 

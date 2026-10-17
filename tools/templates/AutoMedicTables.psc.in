@@ -544,8 +544,33 @@ Function FillFromKeywords(ItemData akRow, Int aiExtraFlags, Int aiRisk)
     If risk >= 7
         flags += FLAG_IMMEDIATE_CHECK
     EndIf
+    ; Вид еды: рецептов Papyrus не видит, поэтому сырое — только по слову риска
+    ; болезни (как в parse_consumables), довоенное — только флагом игрока или из
+    ; основной таблицы (ParseUserRow передаёт их в aiExtraFlags).
+    If food && !cola && !alcohol && !ignoreAsFood && !HasUserKw(f, KW_FRUITORVEGETABLE) && \
+            !HasFlag(flags, FLAG_FOOD_RAW) && !HasFlag(flags, FLAG_FOOD_PACKAGED) && \
+            (HasUserKw(f, KW_HC_DISEASERISK_FOODHIGH) || HasUserKw(f, KW_HC_DISEASERISK_FOODSTANDARD))
+        flags += FLAG_FOOD_RAW
+    EndIf
     akRow.DiseaseRiskPct = risk
     akRow.Flags = flags
+EndFunction
+
+; Биты вида еды (сырое / довоенное) предмета основной таблицы; 0 — не еда,
+; приготовленное, растение или предмета в таблице нет.
+Int Function TableFoodTypeFlags(Form akItem)
+    Int index = IndexOfTable(akItem)
+    If index < 0
+        Return 0
+    EndIf
+    ItemData[] rows = ItemChunk(index / CHUNK_SIZE)
+    Int flags = rows[index % CHUNK_SIZE].Flags
+    If HasFlag(flags, FLAG_FOOD_RAW)
+        Return FLAG_FOOD_RAW
+    ElseIf HasFlag(flags, FLAG_FOOD_PACKAGED)
+        Return FLAG_FOOD_PACKAGED
+    EndIf
+    Return 0
 EndFunction
 
 ; Индекс только в основной таблице (без предметов игрока) или -1.

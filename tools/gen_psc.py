@@ -87,6 +87,10 @@ FLAGS = [
     ('FLAG_CAT_SYRINGER', 0x04000000, 'боеприпас шприцемёта, не для употребления'),
     ('FLAG_SATES_HUNGER', 0x08000000, 'HC_Manager: ObjectTypeFood и нет NonFoodKeywords'),
     ('FLAG_SATES_THIRST', 0x10000000, 'HC_Manager: AnimFurnWater или QuenchesThirst'),
+    # Виды еды (MCM «Виды еды», foodType из parse_consumables). Растение отдельного
+    # бита не имеет: это FLAG_CAT_FRUIT_VEG или FLAG_WILD_PLANT.
+    ('FLAG_FOOD_RAW', 0x20000000, 'сырое: ингредиент готовки еды или риск болезни Survival'),
+    ('FLAG_FOOD_PACKAGED', 0x40000000, 'довоенное и упакованное: еда, которую не готовят'),
 ]
 
 # Производные флаги голода и жажды — ровно по правилам ванильного
@@ -228,6 +232,13 @@ def item_flags(item):
         value |= FLAG_VALUE['FLAG_BLACKLISTED']
     if item.get('addiction'):
         value |= FLAG_VALUE['FLAG_ADDICTIVE']
+    food_type = item.get('foodType')
+    if food_type == 'raw':
+        value |= FLAG_VALUE['FLAG_FOOD_RAW']
+    elif food_type == 'packaged':
+        value |= FLAG_VALUE['FLAG_FOOD_PACKAGED']
+    elif food_type not in (None, 'plant', 'cooked'):
+        raise KeyError('неизвестный foodType %r у %s' % (food_type, item['key']))
     for name in item.get('sustenanceFlags', ()):
         flag = SUSTENANCE_TO_FLAG.get(name)
         if flag:

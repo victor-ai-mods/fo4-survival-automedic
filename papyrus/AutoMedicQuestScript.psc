@@ -103,6 +103,10 @@ Bool RAD_CAP_WITHOUT_CURE = true
 ; Аддиктивная химия и алкоголь (§7 «Прочее»).
 Bool USE_CHEMS = false
 Bool USE_ALCOHOL = false
+; Виды еды (MCM «Виды еды»): довоенное и упакованное, урожай и растения, сырое.
+Bool USE_FOOD_PACKAGED = true
+Bool USE_FOOD_PLANTS = true
+Bool USE_FOOD_RAW = true
 ; Недолеченное в пределах допуска нуждой не считается: иначе жадный подбор
 ; тянет ещё один предмет ради последних пары ОЗ.
 Float Property HP_TOLERANCE_PCT = 2.0 AutoReadOnly Hidden
@@ -1058,6 +1062,10 @@ Int TF_IMMEDIATE_CHECK
 Int TF_IMMUNO_DEF
 Int TF_SATES_HUNGER
 Int TF_SATES_THIRST
+Int TF_CAT_FRUIT_VEG
+Int TF_WILD_PLANT
+Int TF_FOOD_RAW
+Int TF_FOOD_PACKAGED
 
 ; После каждой (пере)сборки таблицы: BuildTables создаёт новые массивы.
 Function CacheTables()
@@ -1093,6 +1101,10 @@ Function CacheTables()
     TF_IMMUNO_DEF = t.FLAG_IMMUNO_DEF
     TF_SATES_HUNGER = t.FLAG_SATES_HUNGER
     TF_SATES_THIRST = t.FLAG_SATES_THIRST
+    TF_CAT_FRUIT_VEG = t.FLAG_CAT_FRUIT_VEG
+    TF_WILD_PLANT = t.FLAG_WILD_PLANT
+    TF_FOOD_RAW = t.FLAG_FOOD_RAW
+    TF_FOOD_PACKAGED = t.FLAG_FOOD_PACKAGED
 
     NL_Lists = new FormList[8]
     Int b = 0
@@ -1494,6 +1506,9 @@ Function LoadSettings()
     RAD_CAP_WITHOUT_CURE = m.RadCapWithoutCure
     USE_CHEMS = m.UseChems
     USE_ALCOHOL = m.UseAlcohol
+    USE_FOOD_PACKAGED = m.UseFoodPackaged
+    USE_FOOD_PLANTS = m.UseFoodPlants
+    USE_FOOD_RAW = m.UseFoodRaw
     MAX_ITEMS_PER_NEED = ClampInt(m.MaxItemsPerNeed, 1, 12)
     MIN_RATE_PCT = Math.Max(m.CombatMinHealRatePct, 0.0)
     RATE_STIMPAK = m.CombatRateStimpak
@@ -1523,7 +1538,10 @@ Function LoadSettings()
         OnOff(ALLOW_RADAWAY, "") + T("reserve ", "резерв ") + RESERVE_RADAWAY + T(", intake <= ", ", набор <= ") + \
         R0(MAX_INGESTED_RADS) + T(", no cure ", ", без вывода ") + OnOff(RAD_CAP_WITHOUT_CURE, "cap") + \
         T("| price <= ", "| цена <= ") + R0(MAX_ITEM_VALUE) + T(", chems ", ", химия ") + OnOff(USE_CHEMS, "") + \
-        T("alcohol ", "алкоголь ") + OnOff(USE_ALCOHOL, "") + T("AP drinks ", "ОД-напитки ") + ApModeName(AP_ITEMS_MODE) + \
+        T("alcohol ", "алкоголь ") + OnOff(USE_ALCOHOL, "") + \
+        T("food: pre-war ", "еда: довоенная ") + OnOff(USE_FOOD_PACKAGED, "") + T("plants ", "растения ") + \
+        OnOff(USE_FOOD_PLANTS, "") + T("raw ", "сырая ") + OnOff(USE_FOOD_RAW, "") + \
+        T("AP drinks ", "ОД-напитки ") + ApModeName(AP_ITEMS_MODE) + \
         T(" at AP < ", " при ОД < ") + R0(AP_TRIGGER_PCT) + \
         T("% (refill to 100%), cola reserve ", "% (восполнять до 100%), запас колы ") + COLA_RESERVE + T(" (best by AP), exclusions ", " (лучшие по ОД), исключения ") + OnOff(USE_EXCLUSIONS, "") + \
         "(" + AM_Excluded.Length + T(") | summary ", ") | сводка ") + NOTIFY_LEVEL + \
@@ -2429,6 +2447,7 @@ String Function ParseUserRow(Form akItem, Int aiLocalId, String[] asParts, AutoM
     Bool cureAddiction = false
     Bool buff = false
     Bool addictive = false
+    Int foodType = 0
     Int risk = -1
     Int p = 2
     While p < asParts.Length
@@ -2468,6 +2487,10 @@ String Function ParseUserRow(Form akItem, Int aiLocalId, String[] asParts, AutoM
             buff = true
         ElseIf field == "addictive"
             addictive = true
+        ElseIf field == "raw"
+            foodType = t.FLAG_FOOD_RAW
+        ElseIf field == "packaged"
+            foodType = t.FLAG_FOOD_PACKAGED
         ElseIf field != ""
             Return T("unknown field ", "неизвестный ключ ") + field
         EndIf
@@ -2486,6 +2509,12 @@ String Function ParseUserRow(Form akItem, Int aiLocalId, String[] asParts, AutoM
     If addictive
         extra += t.FLAG_ADDICTIVE
     EndIf
+    ; Вид еды знакомого предмета (рецепты, которых Papyrus не видит) не теряется
+    ; при замене его чисел, если игрок не указал свой.
+    If foodType == 0
+        foodType = t.TableFoodTypeFlags(akItem)
+    EndIf
+    extra += foodType
     t.FillFromKeywords(row, extra, risk)
 
     Int known = akRows.FindStruct("Item", akItem, 0)
@@ -2526,6 +2555,13 @@ String Function UserRowText(AutoMedicTables:ItemData akRow)
     EndIf
     If Has(flags, TF_CAT_ALCOHOL)
         s += T(", alcohol", ", алкоголь")
+    EndIf
+    If Has(flags, TF_FOOD_RAW)
+        s += T(", raw", ", сырое")
+    ElseIf Has(flags, TF_FOOD_PACKAGED)
+        s += T(", pre-war/packaged", ", довоенное/упакованное")
+    ElseIf IsPlant(flags)
+        s += T(", plant", ", растение")
     EndIf
     Return s
 EndFunction
@@ -3478,10 +3514,21 @@ String Function ExcludeReason(AutoMedicTables:ItemData akData)
         Return T("addictive chem", "аддиктивная химия")
     ElseIf !USE_ALCOHOL && Has(flags, TF_CAT_ALCOHOL)
         Return T("alcohol", "алкоголь")
+    ElseIf !USE_FOOD_PACKAGED && Has(flags, TF_FOOD_PACKAGED)
+        Return T("pre-war food off", "довоенная еда выключена")
+    ElseIf !USE_FOOD_PLANTS && IsPlant(flags)
+        Return T("plants off", "растения выключены")
+    ElseIf !USE_FOOD_RAW && Has(flags, TF_FOOD_RAW)
+        Return T("raw food off", "сырое выключено")
     ElseIf akData.DiseaseRiskPct > MAX_DISEASE_RISK_PCT
         Return T("disease risk ", "риск болезни ") + akData.DiseaseRiskPct + "%"
     EndIf
     Return ""
+EndFunction
+
+; Урожай и растения: фрукт или овощ (FruitOrVegetable) либо дикое растение.
+Bool Function IsPlant(Int aiFlags)
+    Return Has(aiFlags, TF_CAT_FRUIT_VEG) || Has(aiFlags, TF_WILD_PLANT)
 EndFunction
 
 Int Function CachedValue(Form akItem)
