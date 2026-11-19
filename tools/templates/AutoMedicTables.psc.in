@@ -336,7 +336,7 @@ Function AddToNeedLists(Form akItem, ItemData akData)
     If HasFlag(akData.Flags, FLAG_CURES_ADDICTION)
         AM_ListAddiction.AddForm(akItem)
     EndIf
-    If HasFlag(akData.Flags, FLAG_CAT_STIMPAK) && akData.HealPctOfMax > 0.0
+    If (HasFlag(akData.Flags, FLAG_CAT_STIMPAK) && akData.HealPctOfMax > 0.0) || HasFlag(akData.Flags, FLAG_HEALS_LIMBS)
         AM_ListLimbs.AddForm(akItem)
     EndIf
 EndFunction
@@ -440,7 +440,7 @@ EndFunction
 
 ; Flags и DiseaseRiskPct строки игрока по ключевым словам её предмета.
 ; aiExtraFlags — то, что по ключевым словам не видно и игрок указал сам
-; (лечит болезнь / зависимость, баф, аддиктивный); aiRisk >= 0 — его риск
+; (лечит болезнь / зависимость / конечности, баф, аддиктивный); aiRisk >= 0 — его риск
 ; болезни вместо вычисленного.
 Function FillFromKeywords(ItemData akRow, Int aiExtraFlags, Int aiRisk)
     If AM_UserKw == None

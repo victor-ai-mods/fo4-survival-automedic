@@ -27,7 +27,8 @@ Written for the author's own Survival playthrough; the code is public domain, ta
   change, repeat. No sustenance tables are needed, so it works both with vanilla rules and with
   Survival Configuration Menu.
 - **Crippled limbs:** one stimpak heals them all. Off in power armor by default, where crippling
-  does not hinder you.
+  does not hinder you. Items from other mods marked `limbs` in `items-user.json` (bandages,
+  splints) are used for limbs first, and stimpaks only when there are none.
 - **Diseases and addictions** are detected from the live effect snapshot, not from `HasSpell`
   (which never sees a real addiction).
 - **Action points.** When AP drinks are allowed (in combat only by default, and only below an AP
@@ -86,7 +87,8 @@ Papyrus cannot read an item's effects, so consumables from other mods are added 
 `Data\SurvivalAutoMedic\items-user.json` (see `items-user.example.json` next to it), one
 per line: `"Plugin.esp|ID|heal=110|sec=10|rads=15"`. You write the numbers (`heal`, `healpct`,
 `sec`, `rads`, `radsout`, `ap`, `risk`) and flags the item cannot show (`disease`,
-`addiction`, `buff`, `addictive`, and `raw` or `packaged` for the food switches); hunger,
+`addiction`, `limbs` for an item that heals all crippled limbs, `buff`, `addictive`, and
+`raw` or `packaged` for the food switches); hunger,
 thirst, category and disease risk are read from
 the item's keywords. An entry for an item the mod already knows replaces its numbers. With
 the log at Detailed, items in your inventory that the mod does not know are listed as ready

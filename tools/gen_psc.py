@@ -60,7 +60,9 @@ ROLE_VALUE = {json_name: i for i, (_, json_name) in enumerate(ROLES)}
 FLAGS = [
     ('FLAG_FOOD', 0x00000001, 'ENIT: предмет-еда'),
     ('FLAG_MEDICINE', 0x00000002, 'ENIT: медицина'),
-    ('FLAG_POISON', 0x00000004, 'ENIT: яд'),
+    # Был FLAG_POISON (ENIT: яд): ядов среди ALCH таблицы нет, рантайм его не читал,
+    # а свободных битов не осталось. Ставит только флаг limbs в items-user.json.
+    ('FLAG_HEALS_LIMBS', 0x00000004, 'лечит покалеченные конечности (флаг limbs у предмета игрока)'),
     ('FLAG_CURES_DISEASE', 0x00000008, 'лечит болезни Survival'),
     ('FLAG_CURES_ADDICTION', 0x00000010, 'снимает зависимости'),
     ('FLAG_HAS_BUFF', 0x00000020, 'ЛЮБОЙ временный баф -> нельзя есть голодным (M4.2)'),
@@ -213,7 +215,8 @@ def item_flags(item):
     if item.get('isMedicine'):
         value |= FLAG_VALUE['FLAG_MEDICINE']
     if item.get('isPoison'):
-        value |= FLAG_VALUE['FLAG_POISON']
+        # Бит яда отдан под FLAG_HEALS_LIMBS — новый яд в таблице надо разобрать руками.
+        raise ValueError('яд в таблице: %s — бит FLAG_POISON занят FLAG_HEALS_LIMBS' % item['key'])
     if item.get('curesDisease'):
         value |= FLAG_VALUE['FLAG_CURES_DISEASE']
     if item.get('curesAddiction'):

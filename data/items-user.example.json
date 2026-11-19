@@ -12,6 +12,7 @@
     "_comment": "Flags, for what the item does but the mod cannot see:",
     "_comment": "  disease      cures diseases        addiction  cures addictions",
     "_comment": "  buff         gives a timed buff    addictive  can cause an addiction",
+    "_comment": "  limbs        heals all crippled limbs (bandages, splints): used for limbs before stimpaks",
     "_comment": "  raw          raw meat or eggs      packaged   pre-war or packaged food (for the Food types switches)",
     "_comment": "Hunger, thirst, food/drink/chem/alcohol and the disease risk are read from the item's keywords - no need to write them.",
     "_comment": "An entry for an item that the mod already knows (vanilla, DLC, UFO4P) replaces its numbers - useful if another mod changed that item.",
@@ -21,6 +22,7 @@
     "_comment": "  \"Some Chems Mod.esp|0008A4|healpct=30|sec=5\",",
     "_comment": "  \"CleanWater.esl|FE001801|radsout=20\",",
     "_comment": "  \"Doctor Mod.esp|000812|disease\",",
+    "_comment": "  \"Doctor Mod.esp|000815|limbs\",",
     "items": [
     ]
 }

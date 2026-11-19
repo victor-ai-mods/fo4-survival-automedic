@@ -459,6 +459,9 @@ Float S_InDamage
 ; которым осталось не меньше RATE_MIN_LEFT.
 Float S_InRate
 Bool S_AntiradActive
+; У предмета игрока с флагом limbs (UL_Forms) ещё идёт эффект: конечности он
+; долечит сам, второй не нужен (как стимпак «в полёте», M6).
+Bool S_LimbItemActive
 
 Float N_Hunger
 Float N_Thirst
@@ -550,6 +553,9 @@ Bool[] K_APLocked
 Float[] K_AP
 ; Штук кандидата в запасе колы (ColaReserve): мод их не тратит никогда.
 Int[] K_ColaKeep
+; Стимпак (IsStimpak): на него резерв RESERVE_STIMPAKS и тумблер RATE_STIMPAK.
+; Не то же, что USE_LIMBS: конечности лечат и предметы игрока с флагом limbs.
+Bool[] K_Stim
 ; K_AfterFood, а голод закрыть нечем: лечения/вывода/излечения не даст.
 Bool[] K_Dead
 String[] K_Names
@@ -578,6 +584,8 @@ Int G_Considered
 Bool P_RadsUnprofitable
 ; Скорость лечения не добрана из-за лимита штук MAX_ITEMS_PER_NEED (для UNMET).
 Bool P_RateLimitHit
+; Конечности не планировали: их уже лечит стимпак или предмет limbs (для UNMET).
+Bool P_LimbsWait
 
 ; --- стадия C: поиск набора с минимальным перелечением (HealSearch) ---
 ; Типы кандидатов по убыванию H_Cov: кандидат k, закрытие нужды за штуку,
@@ -1054,6 +1062,7 @@ Int TF_CAT_ALCOHOL
 Int TF_CAT_FOOD
 Int TF_CAT_COLA
 Int TF_CAT_STIMPAK
+Int TF_HEALS_LIMBS
 Int TF_CAT_SYRINGER
 Int TF_CURES_ADDICTION
 Int TF_CURES_DISEASE
@@ -1093,6 +1102,7 @@ Function CacheTables()
     TF_CAT_FOOD = t.FLAG_CAT_FOOD
     TF_CAT_COLA = t.FLAG_CAT_COLA
     TF_CAT_STIMPAK = t.FLAG_CAT_STIMPAK
+    TF_HEALS_LIMBS = t.FLAG_HEALS_LIMBS
     TF_CAT_SYRINGER = t.FLAG_CAT_SYRINGER
     TF_CURES_ADDICTION = t.FLAG_CURES_ADDICTION
     TF_CURES_DISEASE = t.FLAG_CURES_DISEASE
@@ -2376,7 +2386,9 @@ EndFunction
 ; radsout (выводит рад), ap (ОД), risk (риск болезни, %, вместо вычисленного).
 ; Флаги: disease (лечит болезни), addiction (снимает зависимость), buff (даёт
 ; временный баф — голодным не есть, M4.2), addictive (вызывает зависимость —
-; не трогать при выключенной химии). Остальное (еда ли, утоляет ли голод и
+; не трогать при выключенной химии), limbs (лечит все покалеченные конечности:
+; бинты и шины из модов, где стимпак их не лечит; 2026-11-20, вопрос cmdgz123
+; на Nexus), raw / packaged (вид еды). Остальное (еда ли, утоляет ли голод и
 ; жажду, категория, риск болезни) — из ключевых слов предмета,
 ; AutoMedicTables.FillFromKeywords. Запись для предмета, который уже есть в
 ; таблице, заменяет его числа. Пример с пояснениями — items-user.example.json.
@@ -2389,10 +2401,26 @@ Function LoadUserItems()
     EndIf
     t.SetUserItems(rows)
     TB_Items3 = t.UserItems()
+    UL_Forms = new Form[0]
+    Int i = 0
+    While i < rows.Length
+        If Has(rows[i].Flags, t.FLAG_HEALS_LIMBS)
+            UL_Forms.Add(rows[i].Item)
+        EndIf
+        i += 1
+    EndWhile
     Log(T("Your items (", "Свои предметы (") + USER_ITEMS_FILE + "): " + rows.Length + " (" + summary + ")")
 EndFunction
 
 String Property USER_ITEMS_FILE = "items-user.json" AutoReadOnly Hidden
+
+; Предметы игрока с флагом limbs: по ним ReadActiveEffects видит, что такой
+; предмет ещё действует (S_LimbItemActive). None/пусто — флагов нет.
+Form[] UL_Forms
+
+Bool Function HasUserLimbItems()
+    Return UL_Forms != None && UL_Forms.Length > 0
+EndFunction
 
 String Function ReadUserItems(AutoMedicTables:ItemData[] akRows)
     AutoMedicTables t = AM_Tables
@@ -2447,6 +2475,7 @@ String Function ParseUserRow(Form akItem, Int aiLocalId, String[] asParts, AutoM
     Bool cureAddiction = false
     Bool buff = false
     Bool addictive = false
+    Bool limbs = false
     Int foodType = 0
     Int risk = -1
     Int p = 2
@@ -2487,6 +2516,8 @@ String Function ParseUserRow(Form akItem, Int aiLocalId, String[] asParts, AutoM
             buff = true
         ElseIf field == "addictive"
             addictive = true
+        ElseIf field == "limbs"
+            limbs = true
         ElseIf field == "raw"
             foodType = t.FLAG_FOOD_RAW
         ElseIf field == "packaged"
@@ -2508,6 +2539,9 @@ String Function ParseUserRow(Form akItem, Int aiLocalId, String[] asParts, AutoM
     EndIf
     If addictive
         extra += t.FLAG_ADDICTIVE
+    EndIf
+    If limbs
+        extra += t.FLAG_HEALS_LIMBS
     EndIf
     ; Вид еды знакомого предмета (рецепты, которых Papyrus не видит) не теряется
     ; при замене его чисел, если игрок не указал свой.
@@ -2549,6 +2583,9 @@ String Function UserRowText(AutoMedicTables:ItemData akRow)
     EndIf
     If Has(flags, TF_CURES_ADDICTION)
         s += T(", cures addiction", ", снимает зависимость")
+    EndIf
+    If Has(flags, TF_HEALS_LIMBS)
+        s += T(", heals limbs", ", лечит конечности")
     EndIf
     If Has(flags, TF_ADDICTIVE)
         s += T(", addictive", ", аддиктивный")
@@ -2876,6 +2913,8 @@ Function ReadActiveEffects(Actor akPlayer)
     S_InDamage = 0.0
     S_InRate = 0.0
     S_AntiradActive = false
+    S_LimbItemActive = false
+    Bool limbItems = HasUserLimbItems()
     S_DiseaseCount = 0
     S_Diseases = ""
     S_AddictionCount = 0
@@ -2954,6 +2993,9 @@ Function ReadActiveEffects(Actor akPlayer)
                 left = 0.0
             EndIf
             Float rest = ae.fMagnitude * left
+            If limbItems && left > 0.0 && !S_LimbItemActive && UL_Forms.Find(ae.MagicItem) >= 0
+                S_LimbItemActive = true
+            EndIf
             If role == TR_HEAL_HP
                 ; В сумму — после цикла, за вычетом вариантов по перку (HealVariants).
                 hItem.Add(ae.MagicItem)
@@ -3465,9 +3507,8 @@ Int Function UsesOf(AutoMedicTables:ItemData akData)
     If akData.HealHP > 0.0 || akData.HealPctOfMax > 0.0
         uses = WithBit(uses, USE_HP)
     EndIf
-    ; Конечности лечит только стимпак (A6): ObjectTypeStimpak и лечение в
-    ; процентах. У Curie's Healthpak ключевое слово есть, но лечит он в ОЗ.
-    If Has(flags, TF_CAT_STIMPAK) && akData.HealPctOfMax > 0.0
+    ; Конечности: стимпак (A6) или предмет игрока с флагом limbs.
+    If IsStimpak(akData) || Has(flags, TF_HEALS_LIMBS)
         uses = WithBit(uses, USE_LIMBS)
     EndIf
     If akData.RadsRemove > 0.0
@@ -3489,6 +3530,12 @@ Int Function UsesOf(AutoMedicTables:ItemData akData)
         uses = WithBit(uses, USE_AP)
     EndIf
     Return uses
+EndFunction
+
+; Стимпак: ObjectTypeStimpak и лечение в процентах. У Curie's Healthpak
+; ключевое слово есть, но лечит он в ОЗ — не стимпак, конечности не лечит.
+Bool Function IsStimpak(AutoMedicTables:ItemData akData)
+    Return Has(akData.Flags, TF_CAT_STIMPAK) && akData.HealPctOfMax > 0.0
 EndFunction
 
 ; Кандидат k идёт под жажду только как кола (MCM ColaForThirst), не как питьё.
@@ -3697,6 +3744,7 @@ Function EvalCandidates()
     K_APLocked = new Bool[n]
     K_AP = new Float[n]
     K_ColaKeep = new Int[n]
+    K_Stim = new Bool[n]
     C_FoodPool = 0
     C_ColaKept = 0
     C_APLocked = 0
@@ -3804,9 +3852,10 @@ Function EvalCandidates()
         EndIf
 
         ; Резервы §7 «Экономия»: стимпаки и RadAway (RadAway — единственный
-        ; предмет с растянутым RestoreRadsChem).
+        ; предмет с растянутым RestoreRadsChem). Предметы с флагом limbs — не стимпаки.
+        K_Stim[k] = IsStimpak(d)
         Int reserve = 0
-        If Has(K_Uses[k], USE_LIMBS)
+        If K_Stim[k]
             reserve = RESERVE_STIMPAKS
         ElseIf d.MedicRadMag > 0.0 && d.MedicRadDur > 0.0
             reserve = RESERVE_RADAWAY
@@ -3938,6 +3987,7 @@ Function Plan()
     P_ReserveHit = false
     P_RadsUnprofitable = false
     P_RateLimitHit = false
+    P_LimbsWait = false
     If C_APLocked > 0
         P_Notes = Join(P_Notes, T("AP drinks (> ", "ОД-напитки (> ") + R0(C_APLock) + T(" AP) left alone: ", " ОД) не трогаю: ") + C_APWhy + \
             " (" + C_APLocked + T(" kinds)", " видов)"))
@@ -4243,29 +4293,52 @@ Function PlanRads(String asStage)
     EndWhile
 EndFunction
 
-; B: один стимпак на все конечности (A6).
+; B: один предмет на все конечности (A6). Сначала предметы игрока с флагом
+; limbs (бинты, шины из модов, где стимпак конечности не лечит): игрок сам
+; назначил их под конечности, стимпаки остаются на ОЗ. Стимпак — только если
+; таких предметов нет.
 Function PlanLimbs()
+    P_LimbsWait = false
     If N_Limbs <= 0
         Return
     EndIf
-    ; Стимпак уже капает — он долечит и конечности; второй сожжёт пачку (M6).
-    If S_InHealPct > 0.0
-        P_Notes = Join(P_Notes, T("limbs: a stimpak is already working, no second one needed", "limbs: стимпак уже действует, второй не нужен"))
+    ; Предмет limbs ещё действует — долечит сам; второй был бы лишним.
+    If S_LimbItemActive
+        P_LimbsWait = true
+        P_Notes = Join(P_Notes, T("limbs: a limbs item is already working, no second one needed", "limbs: предмет для конечностей уже действует, второй не нужен"))
         Return
     EndIf
+    Int best = CheapestForLimbs(true)
+    If best < 0
+        ; Стимпак уже капает — он долечит и конечности; второй сожжёт пачку (M6).
+        ; Предмет limbs (выше) берётся и при стимпаке в полёте: в модах, где
+        ; стимпак конечности не лечит, иначе ждали бы до 50 с.
+        If S_InHealPct > 0.0
+            P_LimbsWait = true
+            P_Notes = Join(P_Notes, T("limbs: a stimpak is already working, no second one needed", "limbs: стимпак уже действует, второй не нужен"))
+            Return
+        EndIf
+        best = CheapestForLimbs(false)
+    EndIf
+    If best >= 0
+        AddEntry(best, NEED_LIMBS, K_Heal[best])
+    EndIf
+EndFunction
+
+; Самый дешёвый кандидат под конечности: с флагом limbs (abFlagged) или без него
+; (стимпак). -1 — нет.
+Int Function CheapestForLimbs(Bool abFlagged)
     Int best = -1
     Int k = 0
     While k < K_Forms.Length
-        If Has(K_Uses[k], USE_LIMBS) && LeftOf(k) > 0
+        If Has(K_Uses[k], USE_LIMBS) && Has(K_Flags[k], TF_HEALS_LIMBS) == abFlagged && LeftOf(k) > 0
             If best < 0 || CostOf(k) < CostOf(best)
                 best = k
             EndIf
         EndIf
         k += 1
     EndWhile
-    If best >= 0
-        AddEntry(best, NEED_LIMBS, K_Heal[best])
-    EndIf
+    Return best
 EndFunction
 
 ; D: по одному предмету на болезни и на зависимости — самый дешёвый по cost
@@ -4541,7 +4614,7 @@ Function PlanRate()
     Int k = 0
     While k < n
         ok[k] = K_Rate[k] > 0.0 && LeftOf(k) > 0 && !(K_Risk[k] > 0 && Has(K_Flags[k], TF_IMMEDIATE_CHECK)) && \
-            (RATE_STIMPAK || !Has(K_Uses[k], USE_LIMBS))
+            (RATE_STIMPAK || !K_Stim[k])
         If ok[k]
             m += 1
         EndIf
@@ -4985,7 +5058,8 @@ Function WriteReport(Actor akPlayer)
     EndIf
     Log("         InFlight: heal " + R1(S_InHeal) + " HP (stimpak " + R1(S_InHealPct) + "), " + \
         "damage " + R1(S_InDamage) + ", rad out " + R1(S_InRadOut) + ", rad in " + \
-        R1(S_InRadIn) + ", AP " + R1(S_InAP) + ", rate " + R1(S_InRate) + " HP/s  (effects " + S_EffectsTotal + ")")
+        R1(S_InRadIn) + ", AP " + R1(S_InAP) + ", rate " + R1(S_InRate) + " HP/s, limbs item " + \
+        S_LimbItemActive + "  (effects " + S_EffectsTotal + ")")
     Log("         Perks: Medic " + S_Medic + ", LeadBelly " + S_LeadBelly + \
         ", Adamantium " + S_Adamantium + ", ChemResistant " + S_ChemResistant + \
         ", PartyBoy " + S_PartyBoy + ", Aquaboy " + S_Aquaboy + \
@@ -5241,9 +5315,13 @@ String Function UnmetText()
         EndIf
         out = Join(out, "hp (" + R0(hpLeft) + T(" left): ", " осталось): ") + why)
     EndIf
-    If N_Limbs > 0 && S_InHealPct <= 0.0 && P_For.Find(NEED_LIMBS) < 0
+    If N_Limbs > 0 && !P_LimbsWait && P_For.Find(NEED_LIMBS) < 0
         String why = T("no stimpak", "нет стимпака")
-        If !ALLOW_STIMPAK
+        If HasUserLimbItems()
+            why = T("no stimpak and no limbs item", "нет ни стимпака, ни предмета для конечностей")
+        EndIf
+        ; Предметы limbs резерва не имеют: раз кандидаты есть, а не взяли — это стимпаки.
+        If !ALLOW_STIMPAK && C_LimbsCount == 0
             why = T("stimpaks off in MCM", "стимпаки выключены в MCM")
         ElseIf C_LimbsCount > 0
             why = T("stimpaks in reserve (", "стимпаки в резерве (") + RESERVE_STIMPAKS + ")"
@@ -5520,7 +5598,7 @@ EndFunction
 ; Режим «один предмет за нажатие» (MCM OneItemPerPress): первая принятая штука
 ; заканчивает исполнение (OneDone), остальное достанется следующему нажатию
 ; или авто-циклу — их план строится заново, с учётом «в полёте». Порядок — по
-; срочности, а не §4.4: стимпак на конечности (он и лечит), лечение не едой,
+; срочности, а не §4.4: стимпак или предмет limbs на конечности, лечение не едой,
 ; ОД, вывод радиации, голод, жажда, затем то, что M4 велит есть сытым, и
 ; болезни. Еда на ОЗ здесь после голода: голодным она не подействует.
 Function ExecuteOne(Actor akPlayer)
@@ -5876,7 +5954,7 @@ Bool Function RateNeeds(Int e)
     If N_RateGoal <= 0.0 || K_Rate[P_K[e]] <= 0.0
         Return false
     EndIf
-    If !RATE_STIMPAK && Has(K_Uses[P_K[e]], USE_LIMBS)
+    If !RATE_STIMPAK && K_Stim[P_K[e]]
         Return false
     EndIf
     Float rate = E_Rate

@@ -77,6 +77,15 @@ def load_exclusions():
 EXCLUDED = load_exclusions()
 
 
+# Предметы игрока (items-user.json) для ситуаций: в игре их строку собирает
+# ParseUserRow + FillFromKeywords; здесь — сразу готовые поля.
+#   "Bandages.esp|000800|limbs" — бинт из мода, где стимпак конечности не лечит.
+USER_TEST_ITEMS = [
+    dict(key='Bandages.esp|000800', file='Bandages.esp', localId='000800', editorId='TestBandage',
+         nameEn='Bandage', value=10, diseaseRiskPct=0, Flags=F['FLAG_HEALS_LIMBS']),
+]
+
+
 class Table:
     def __init__(self):
         with open(os.path.join(ROOT, 'data', 'consumables.json'), encoding='utf-8') as f:
@@ -88,6 +97,8 @@ class Table:
             for key in ('nameEn', 'nameRu', 'editorId'):
                 if item.get(key):
                     self.by_name.setdefault(item[key], row)
+        for row in USER_TEST_ITEMS:
+            self.by_name[row['nameEn']] = dict(row)
 
     def get(self, name):
         return self.by_name[name]
@@ -111,6 +122,8 @@ class Player:
         self.immuno = kw.get('immuno', False)
         self.in_heal = kw.get('in_heal', 0.0)
         self.in_heal_pct = kw.get('in_heal_pct', 0.0)
+        # S_LimbItemActive: у предмета с флагом limbs ещё идёт эффект.
+        self.limb_item_active = kw.get('limb_item_active', False)
         self.in_rad_out = kw.get('in_rad_out', 0.0)
         self.in_damage = 0.0
         self.perks = set(kw.get('perks', ()))
@@ -285,9 +298,12 @@ class Planner:
                 heal = rad_out = 0.0
             c['heal'], c['rad_out'], c['rad_in'] = heal, rad_out, d.get('radsAdd', 0.0) * lead
             c['rate'] = self.heal_rate(d, heal)
-            c['limbs'] = has(flags, 'FLAG_CAT_STIMPAK') and d.get('healPctOfMax', 0.0) > 0
+            # IsStimpak / UsesOf: конечности лечит стимпак или предмет с флагом limbs.
+            c['stim'] = has(flags, 'FLAG_CAT_STIMPAK') and d.get('healPctOfMax', 0.0) > 0
+            c['limbs_flag'] = has(flags, 'FLAG_HEALS_LIMBS')
+            c['limbs'] = c['stim'] or c['limbs_flag']
             reserve = 0
-            if c['limbs']:
+            if c['stim']:
                 reserve = RESERVE_STIMPAKS
             elif d.get('MedicRadMag', 0.0) > 0 and d.get('MedicRadDur', 0.0) > 0:
                 reserve = RESERVE_RADAWAY
@@ -463,10 +479,16 @@ class Planner:
     def plan_limbs(self):
         if self.n_limbs <= 0:
             return
-        if self.p.in_heal_pct > 0:
-            self.notes.append('limbs: stimpak in flight')
+        if self.p.limb_item_active:
+            self.notes.append('limbs: limbs item in flight')
             return
-        cands = [c for c in self.k if c['limbs'] and self.left(c) > 0]
+        # Сначала предметы с флагом limbs (CheapestForLimbs(true)), стимпак — без них.
+        cands = [c for c in self.k if c['limbs'] and c['limbs_flag'] and self.left(c) > 0]
+        if not cands:
+            if self.p.in_heal_pct > 0:
+                self.notes.append('limbs: stimpak in flight')
+                return
+            cands = [c for c in self.k if c['limbs'] and not c['limbs_flag'] and self.left(c) > 0]
         if cands:
             self.add(min(cands, key=self.cost), NEED_LIMBS)
 
@@ -651,7 +673,7 @@ class Planner:
                 continue
             if c['risk'] > 0 and has(c['flags'], 'FLAG_IMMEDIATE_CHECK'):
                 continue
-            if not p.rate_stimpak and c['limbs']:
+            if not p.rate_stimpak and c['stim']:
                 continue
             types.append({'c': c, 'rate': c['rate'], 'cost': self.cost(c), 'left': self.left(c),
                           'pool': c['in_pool'] and pool_room is not None, 'rad': c['rad_in']})
@@ -957,6 +979,21 @@ SCENARIOS = [
      {('Nuka-Cola', 'hp'): 4}),
     ('F3. Растения выкл. при выключенном файле исключений: Tato и Carrot не трогаются',
      dict(hp=384, use_exclusions=False, use_food_plants=False), {'Tato': 5, 'Carrot': 5}, {}),
+    # --- 2026-11-20: флаг limbs в items-user.json (бинт из мода) ---
+    ('L1. Конечность, ОЗ полные: бинт (флаг limbs), а не стимпак',
+     dict(limbs=1), {'Stimpak': 5, 'Bandage': 3},
+     {('Bandage', 'limbs'): 1}),
+    ('L2. Конечность, стимпак в полёте: бинт всё равно (в модах стимпак конечности не лечит)',
+     dict(hp=384, limbs=1, in_heal=144, in_heal_pct=144), {'Stimpak': 5, 'Bandage': 3},
+     {('Bandage', 'limbs'): 1}),
+    ('L3. Конечность, бинт ещё действует — ничего',
+     dict(limbs=1, limb_item_active=True), {'Stimpak': 5, 'Bandage': 3}, {}),
+    ('L4. Резерв стимпаков 2 на бинты не действует: последний бинт тратится',
+     dict(limbs=1), {'Stimpak': 2, 'Bandage': 1},
+     {('Bandage', 'limbs'): 1}),
+    ('L5. Бинтов нет — стимпак, как в ситуации 3',
+     dict(limbs=1), {'Stimpak': 5},
+     {('Stimpak', 'limbs'): 1}),
 ]
 
 
