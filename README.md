@@ -64,7 +64,7 @@ message box when a save loads and when you use the item, instead of silently doi
 **No DLC required.** Items from DLC you own are supported; items from DLC you do not own are
 skipped silently. The same goes for Creation Club: the table knows the 53 consumables of the six
 Creation Club packs that have any (Slocum's Joe, Halloween Workshop, Manwell Rifle Set,
-Captain's Hat Mercenaries, Disintegrate, Astronaut Power Armor; since 1.7.1). One plugin, one
+Capital Wasteland Mercenaries, Disintegrate, Astronaut Power Armor; since 1.7.1). One plugin, one
 master (`Fallout4.esm`).
 
 ## Settings

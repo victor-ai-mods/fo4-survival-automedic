@@ -78,7 +78,7 @@
   `Game.GetForm(XX000000 + LocalId)`, а у ESL такого FormID нет.
 - **Creation Club (1.7.1, 2026-11-21).** Из 173 CC Anniversary Edition расходуемые предметы есть
   у шести: Slocum's Joe (42 — пончики, кофе, чай, молоко брамина), Halloween Workshop (3
-  конфеты), Manwell Rifle Set (5), Captain's Hat Mercenaries (Aqua Pura), Disintegrate (1),
+  конфеты), Manwell Rifle Set (5), Capital Wasteland Mercenaries (Aqua Pura), Disintegrate (1),
   Astronaut Power Armor (Cosmic Candy). Все — новые записи с мастером `Fallout4.esm`, ванильных
   не переопределяют. Это обычные строки основной таблицы (после ванили и DLC, чанк 3),
   разобранные по AE-установке `D:\Games\F4_AE` вместе с её `Fallout4.esm` (`CC_PLUGINS` /
