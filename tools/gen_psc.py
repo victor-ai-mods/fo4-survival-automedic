@@ -29,8 +29,9 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CHUNK_SIZE = 128
 # Столько чанков предметов копирует к себе AutoMedicQuestScript.CacheTables
-# (TB_Items0..2): больше — надо дописать и там.
-CACHED_ITEM_CHUNKS = 3
+# (TB_Items0..3): больше — надо дописать и там. Следующий за ними номер —
+# чанк предметов игрока (USER_CHUNK). 2026-11-21: 3 -> 4 ради Creation Club.
+CACHED_ITEM_CHUNKS = 4
 INDENT = ' ' * 4
 
 # --- роли эффектов ---------------------------------------------------
@@ -584,6 +585,12 @@ def main():
         })
 
     rows = [item_row(index, item) for index, item in enumerate(items)]
+    # BuildTables считает FullId как «начало FormID файла + LocalId»: у лёгкого
+    # плагина (ESL) это верно, только пока LocalId помещается в 12 бит.
+    for item, row in zip(items, rows):
+        if item['file'].lower().endswith('.esl') and row['LocalId'] >= 0x1000:
+            raise SystemExit('%s: LocalId 0x%X у ESL не помещается в 12 бит'
+                             % (item['key'], row['LocalId']))
     if len(chunk_ranges(len(rows))) > CACHED_ITEM_CHUNKS:
         raise SystemExit('предметов %d: AutoMedicQuestScript.CacheTables держит только %d чанка'
                          % (len(rows), CACHED_ITEM_CHUNKS))
@@ -655,6 +662,9 @@ def main():
         ('CHANCE_CHUNKS', len(chance_spans)),
         ('EFFECT_COUNT', len(effects)),
         ('PATCH_COUNT', len(layers)),
+        # Предметы игрока — сразу за последним чанком, который держит кеш
+        # AutoMedicQuestScript, даже если таблица короче.
+        ('USER_CHUNK', CACHED_ITEM_CHUNKS),
     ]
 
     raw_parts = []

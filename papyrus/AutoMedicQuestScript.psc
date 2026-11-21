@@ -711,8 +711,8 @@ Function DropLog()
     L_Held = new String[0]
 EndFunction
 
-Function Log(String asText)
-    If L_Hold
+Function Log(String asText, Bool abNoHold = false)
+    If L_Hold && !abNoHold
         L_Held.Add(asText)
         If L_Held.Length >= LOG_BUFFER_MAX
             ReleaseLog()
@@ -888,6 +888,20 @@ Function LogAt(Int aiLevel, String asText)
     EndIf
 EndFunction
 
+; Строки потока загрузки (Refresh, исключения, свои предметы) и кнопок MCM — мимо
+; удержания авто-цикла (HoldLog): они идут параллельно ему, и пустой авто-цикл
+; (DropLog) выбрасывал их вместе со своими. 2026-11-21: так пропала итоговая строка
+; «Свои предметы» после правки items-user.json.
+Function LogR(String asText)
+    Log(asText, true)
+EndFunction
+
+Function LogAtR(Int aiLevel, String asText)
+    If LOG_LEVEL >= aiLevel
+        Log(asText, true)
+    EndIf
+EndFunction
+
 ; Целое с округлением — Papyrus печатает Float как "142.000000".
 String Function R0(Float afValue)
     If afValue < 0.0
@@ -1041,9 +1055,13 @@ EndFunction
 AutoMedicTables:ItemData[] TB_Items0
 AutoMedicTables:ItemData[] TB_Items1
 AutoMedicTables:ItemData[] TB_Items2
-; Предметы игрока (items-user.json) — чанк AutoMedicTables.USER_CHUNK.
+; С 1.7.1 (предметы Creation Club) — четвёртый чанк таблицы. До 1.7.1 здесь
+; лежали предметы игрока: в старом сейве переменная перезапишется CacheTables.
 AutoMedicTables:ItemData[] TB_Items3
-Int TB_UserChunk = 3
+; Предметы игрока (items-user.json) — чанк AutoMedicTables.USER_CHUNK.
+AutoMedicTables:ItemData[] TB_UserItems
+Int TB_UserChunk = 4
+Int TB_ItemChunks = 4
 AutoMedicTables:EffectData[] TB_Effects
 Int TB_ChunkSize = 128
 Int TB_ItemCount = 0
@@ -1082,8 +1100,10 @@ Function CacheTables()
     TB_Items0 = t.ItemChunk(0)
     TB_Items1 = t.ItemChunk(1)
     TB_Items2 = t.ItemChunk(2)
-    TB_Items3 = t.UserItems()
+    TB_Items3 = t.ItemChunk(3)
+    TB_UserItems = t.UserItems()
     TB_UserChunk = t.USER_CHUNK
+    TB_ItemChunks = t.ITEM_CHUNKS
     TB_Effects = t.GetEffects()
     TB_ChunkSize = t.CHUNK_SIZE
     TB_ItemCount = t.ITEM_COUNT
@@ -1135,6 +1155,8 @@ AutoMedicTables:ItemData[] Function ItemChunkL(Int aiChunk)
         Return TB_Items2
     ElseIf aiChunk == 3
         Return TB_Items3
+    ElseIf aiChunk == TB_UserChunk
+        Return TB_UserItems
     EndIf
     Return None
 EndFunction
@@ -1157,14 +1179,14 @@ Int Function IndexOfFullIdL(Int aiFormId)
     If aiFormId == 0
         Return -1
     EndIf
-    If TB_Items3 != None
-        Int user = TB_Items3.FindStruct("FullId", aiFormId, 0)
+    If TB_UserItems != None
+        Int user = TB_UserItems.FindStruct("FullId", aiFormId, 0)
         If user >= 0
             Return TB_UserChunk * TB_ChunkSize + user
         EndIf
     EndIf
     Int chunk = 0
-    While chunk < 3
+    While chunk < TB_ItemChunks
         AutoMedicTables:ItemData[] rows = ItemChunkL(chunk)
         If rows != None
             Int slot = rows.FindStruct("FullId", aiFormId, 0)
@@ -1212,11 +1234,11 @@ EndEvent
 ; Пересобирает таблицу, если версия данных изменилась, собирает формы
 ; фазы 0 и следит за тем, чтобы предмет-инструмент был у игрока.
 Function Refresh(Bool abForce)
-    Log(T("Language: English (sLanguage=", "Язык: русский (sLanguage=") + AM_Lang + ")")
+    LogR(T("Language: English (sLanguage=", "Язык: русский (sLanguage=") + AM_Lang + ")")
     ; Сейвы с 1.4.0 и раньше: подписать проверку на загрузки (и показать её сейчас).
     AM_Check.EnsureRegistered()
     AM_SetupOK = AM_Check.Status() == AM_Check.STATUS_OK
-    Log(T("Setup: ", "Установка: ") + AM_Check.Summary())
+    LogR(T("Setup: ", "Установка: ") + AM_Check.Summary())
     If !AM_SetupOK
         ; Окно уже показал AutoMedicCheck. Таблицы и таймеры — после починки,
         ; на следующей загрузке; предмет выдаём, чтобы нажатие объяснило, в чём дело.
@@ -1224,24 +1246,26 @@ Function Refresh(Bool abForce)
         FlushLog()
         Return
     EndIf
+    Bool rebuilt = false
     If !AM_Tables.IsBuilt() || abForce
+        rebuilt = true
         Float started = Utility.GetCurrentRealTime()
         AM_Tables.BuildTables(abForce)
         Float spent = Utility.GetCurrentRealTime() - started
         ; A19 из §10: замерить стоимость ~350 вызовов GetFormFromFile.
-        Log(T("Item table built in ", "Таблица собрана за ") + spent + T(" s: resolved ", " с: разрешено ") + AM_Tables.ResolvedCount() + \
-            T(", skipped (no DLC) ", ", пропущено (нет DLC) ") + AM_Tables.SkippedCount() + \
+        LogR(T("Item table built in ", "Таблица собрана за ") + spent + T(" s: resolved ", " с: разрешено ") + AM_Tables.ResolvedCount() + \
+            T(", skipped (plugin not loaded: DLC, Creation Club) ", ", пропущено (нет плагина: DLC, Creation Club) ") + AM_Tables.SkippedCount() + \
             T(", without full FormID ", ", без полного FormID ") + AM_Tables.NoFullIdCount() + \
             T(", in list ", ", в списке ") + AM_AllConsumables.GetSize() + T(", effects ", ", эффектов ") + AM_Tables.EffectCount() + \
             T(", patch layers: ", ", слои исправлений: ") + AM_Tables.ActivePatchNames())
     Else
-        Log(T("Item table already built: ", "Таблица уже собрана: ") + AM_Tables.ResolvedCount() + T(" items, patch layers: ", " предметов, слои исправлений: ") + \
+        LogR(T("Item table already built: ", "Таблица уже собрана: ") + AM_Tables.ResolvedCount() + T(" items, patch layers: ", " предметов, слои исправлений: ") + \
             AM_Tables.ActivePatchNames())
     EndIf
     CacheTables()
     Float t0 = Utility.GetCurrentRealTime()
     ResolveForms()
-    Log(T("Phase 0 forms resolved in ", "Формы фазы 0 собраны за ") + R1((Utility.GetCurrentRealTime() - t0) * 1000.0) + T(" ms", " мс"))
+    LogR(T("Phase 0 forms resolved in ", "Формы фазы 0 собраны за ") + R1((Utility.GetCurrentRealTime() - t0) * 1000.0) + T(" ms", " мс"))
     ; Кеши сессии: цены и имена могли смениться вместе с модами и языком.
     VC_Forms = new Form[0]
     VC_Values = new Int[0]
@@ -1249,7 +1273,7 @@ Function Refresh(Bool abForce)
     NC_Names = new String[0]
     S_PerksAt = 0.0
     LoadExclusions()
-    LoadUserItems()
+    LoadUserItems(false, rebuilt)
     GiveToolOnce()
     FlushLog()
     ; Шаг 9: реальное время новой сессии идёт с нуля — отметки авторежима
@@ -2270,7 +2294,7 @@ Function LoadExclusions()
     AM_Excluded = new Form[0]
     String a = ReadExclusionFile("exclusions-default.json")
     String b = ReadExclusionFile("exclusions-user.json")
-    Log(T("Exclusions: ", "Исключения: ") + AM_Excluded.Length + T(" forms (default: ", " форм (default: ") + a + "; user: " + b + ")")
+    LogR(T("Exclusions: ", "Исключения: ") + AM_Excluded.Length + T(" forms (default: ", " форм (default: ") + a + "; user: " + b + ")")
 EndFunction
 
 ; Добавляет формы файла в AM_Excluded; возвращает сводку для лога.
@@ -2392,15 +2416,51 @@ EndFunction
 ; жажду, категория, риск болезни) — из ключевых слов предмета,
 ; AutoMedicTables.FillFromKeywords. Запись для предмета, который уже есть в
 ; таблице, заменяет его числа. Пример с пояснениями — items-user.example.json.
-Function LoadUserItems()
+;
+; Кеш разбора (1.7.1). Разбор стоит дорого: ~100 вызовов GOEPE и движка на
+; запись, каждый ждёт кадра, — в замере 2026-11-21 (стенд Dev, игра в фоне, авторежим
+; работал) 128 записей читались 396.6 с, около 3 с на запись. Поэтому на загрузке
+; файл разбирается заново, только если он изменился (строки сравниваются с
+; запомненными в сейве UL_Lines), сменилась таблица или формат разбора
+; (USER_ITEMS_FORMAT), исчез плагин одной из строк или появился плагин строки,
+; которой раньше не было. Иначе строки берутся из сейва (AM_Tables.UserItems() и
+; списки нужд там уже есть), а полный FormID сверяется по одной строке на плагин —
+; порядок загрузки мог смениться. Кнопка MCM разбирает файл всегда (abForce).
+; abListsReset — таблица только что пересобрана: её Revert очистил списки нужд,
+; предметы игрока надо вернуть туда и из кеша.
+Function LoadUserItems(Bool abForce = false, Bool abListsReset = false)
     AutoMedicTables t = AM_Tables
     AutoMedicTables:ItemData[] rows = new AutoMedicTables:ItemData[0]
     String summary = T("no file", "нет файла")
+    Bool cached = false
     If GardenOfEden2.DoesFileExist(USER_ITEMS_FILE, MOD_DATA_PATH)
-        summary = ReadUserItems(rows)
+        Float started = Utility.GetCurrentRealTime()
+        String[] lines = GardenOfEden2.GetLinesFromFile(USER_ITEMS_FILE, MOD_DATA_PATH)
+        If !abForce && UserItemsUnchanged(lines)
+            cached = true
+            rows = t.UserItems()
+            Int fixedIds = RefreshUserFullIds(rows)
+            summary = T("file unchanged, taken from the save: ", "файл не менялся, взято из сейва: ") + UL_Summary
+            If fixedIds > 0
+                summary += T(", load order changed, FormID updated for ", ", порядок загрузки сменился, FormID обновлён у ") + fixedIds
+            EndIf
+        Else
+            summary = ReadUserItems(lines, rows)
+            UL_Lines = lines
+            UL_Version = t.DATA_VERSION
+            UL_Format = USER_ITEMS_FORMAT
+            UL_Summary = summary
+        EndIf
+        summary += T(", in ", ", за ") + R1(Utility.GetCurrentRealTime() - started) + T(" s", " с")
+    Else
+        UL_Lines = None
     EndIf
-    t.SetUserItems(rows)
-    TB_Items3 = t.UserItems()
+    If !cached
+        t.SetUserItems(rows)
+    ElseIf abListsReset
+        t.AddUserItemsToLists()
+    EndIf
+    TB_UserItems = t.UserItems()
     UL_Forms = new Form[0]
     Int i = 0
     While i < rows.Length
@@ -2409,7 +2469,7 @@ Function LoadUserItems()
         EndIf
         i += 1
     EndWhile
-    Log(T("Your items (", "Свои предметы (") + USER_ITEMS_FILE + "): " + rows.Length + " (" + summary + ")")
+    LogR(T("Your items (", "Свои предметы (") + USER_ITEMS_FILE + "): " + rows.Length + " (" + summary + ")")
 EndFunction
 
 String Property USER_ITEMS_FILE = "items-user.json" AutoReadOnly Hidden
@@ -2422,14 +2482,121 @@ Bool Function HasUserLimbItems()
     Return UL_Forms != None && UL_Forms.Length > 0
 EndFunction
 
-String Function ReadUserItems(AutoMedicTables:ItemData[] akRows)
+; Версия разбора items-user.json: поднять при любой правке ReadUserItems /
+; ParseUserRow / FillFromKeywords, чтобы старые сейвы разобрали файл заново.
+Int Property USER_ITEMS_FORMAT = 1 AutoReadOnly Hidden
+
+; Кеш разбора (см. LoadUserItems). Строки файла при последнем разборе — массив
+; GOEPE, бывает длиннее 128 (файл sirlach — 1600 строк).
+String[] UL_Lines
+Int UL_Version = 0
+Int UL_Format = 0
+String UL_Summary = ""
+; Плагины строк, разобранных в таблицу, и номер плагина у каждой строки
+; AM_Tables.UserItems() (тот же порядок): по первой строке плагина сверяется FormID.
+String[] UL_Plugins
+Int[] UL_RowPlugin
+; Плагины строк «нет плагина»: появился такой — файл разбирается заново.
+String[] UL_MissingPlugins
+
+Bool Function UserItemsUnchanged(String[] asLines)
     AutoMedicTables t = AM_Tables
-    String[] lines = GardenOfEden2.GetLinesFromFile(USER_ITEMS_FILE, MOD_DATA_PATH)
+    If UL_Lines == None || asLines == None || UL_Lines.Length != asLines.Length
+        Return false
+    ElseIf UL_Version != t.DATA_VERSION || UL_Format != USER_ITEMS_FORMAT
+        Return false
+    EndIf
+    AutoMedicTables:ItemData[] rows = t.UserItems()
+    If UL_RowPlugin == None || UL_Plugins == None || UL_RowPlugin.Length != rows.Length
+        Return false
+    EndIf
+    ; Сравнение строк — без вызовов движка (== у строк Papyrus без учёта регистра,
+    ; а разбор и так к регистру не чувствителен).
+    Int i = 0
+    While i < asLines.Length
+        If UL_Lines[i] != asLines[i]
+            Return false
+        EndIf
+        i += 1
+    EndWhile
+    i = 0
+    While i < rows.Length
+        If rows[i].Item == None
+            Return false
+        EndIf
+        i += 1
+    EndWhile
+    If UL_MissingPlugins != None
+        i = 0
+        While i < UL_MissingPlugins.Length
+            If Game.IsPluginInstalled(UL_MissingPlugins[i])
+                Return false
+            EndIf
+            i += 1
+        EndWhile
+    EndIf
+    Return true
+EndFunction
+
+; Полный FormID строк из кеша: по первой строке каждого плагина; не совпал —
+; плагин переехал в порядке загрузки, и его строки пересчитываются. Сколько строк
+; исправлено.
+Int Function RefreshUserFullIds(AutoMedicTables:ItemData[] akRows)
+    Int fixedRows = 0
+    Int p = 0
+    While p < UL_Plugins.Length
+        Int first = UL_RowPlugin.Find(p)
+        If first >= 0 && akRows[first].Item.GetFormID() != akRows[first].FullId
+            Int k = first
+            While k < akRows.Length
+                If UL_RowPlugin[k] == p
+                    akRows[k].FullId = akRows[k].Item.GetFormID()
+                    fixedRows += 1
+                EndIf
+                k += 1
+            EndWhile
+        EndIf
+        p += 1
+    EndWhile
+    Return fixedRows
+EndFunction
+
+Int Function UserPluginSlot(String asPlugin)
+    Int slot = UL_Plugins.Find(asPlugin)
+    If slot < 0
+        UL_Plugins.Add(asPlugin)
+        slot = UL_Plugins.Length - 1
+    EndIf
+    Return slot
+EndFunction
+
+String Function ReadUserItems(String[] lines, AutoMedicTables:ItemData[] akRows)
+    AutoMedicTables t = AM_Tables
+    UL_Plugins = new String[0]
+    UL_RowPlugin = new Int[0]
+    UL_MissingPlugins = new String[0]
     Int missing = 0
     Int broken = 0
+    Int unread = 0
     Int i = 0
     While i < lines.Length
-        String[] parts = EntryParts(lines[i])
+        String[] parts = None
+        If akRows.Length >= t.USER_MAX
+            ; Предел набран (1.7.1): дальше файл не читается. Раньше каждая
+            ; лишняя строка разбиралась целиком (GetFormFromFile и ~25 HasKeyword,
+            ; ~1.5 с в бою за ресурсы Papyrus) и только потом отбрасывалась
+            ; со строкой в логе: файл на 1600 строк грузил скрипты ~40 минут
+            ; после каждой загрузки (лог sirlach с Nexus, 2026-11-20).
+            unread = UnreadEntries(lines, i)
+            If unread > 0
+                LogR(T("  your items: the limit of ", "  свои предметы: набран предел в ") + t.USER_MAX + \
+                    T(" items is reached, the file from line ", " предметов, файл со строки ") + (i + 1) + \
+                    T(" is not read (", " не читается (") + unread + T(" more entries)", " записей)"))
+            EndIf
+            i = lines.Length
+        Else
+            parts = EntryParts(lines[i])
+        EndIf
         If parts != None
             String err = ""
             Int id = 0
@@ -2449,18 +2616,43 @@ String Function ReadUserItems(AutoMedicTables:ItemData[] akRows)
             EndIf
             If err == "" && f == None
                 missing += 1
+                If UL_MissingPlugins.Find(parts[0]) < 0 && UL_MissingPlugins.Length < 128
+                    UL_MissingPlugins.Add(parts[0])
+                EndIf
             ElseIf err == ""
+                Int before = akRows.Length
                 err = ParseUserRow(f, id, parts, akRows)
+                If akRows.Length > before
+                    UL_RowPlugin.Add(UserPluginSlot(parts[0]))
+                EndIf
             EndIf
             If err != ""
                 broken += 1
-                Log(T("  your items: line ", "  свои предметы: строка ") + (i + 1) + ": " + err + " | " + lines[i])
+                LogR(T("  your items: line ", "  свои предметы: строка ") + (i + 1) + ": " + err + " | " + lines[i])
             EndIf
         EndIf
         i += 1
     EndWhile
-    Return lines.Length + T(" lines, plugin missing ", " строк, нет плагина ") + missing + \
+    String out = lines.Length + T(" lines, plugin missing ", " строк, нет плагина ") + missing + \
         T(", errors ", ", ошибок ") + broken
+    If unread > 0
+        out += T(", not read after the limit ", ", не прочитано сверх предела ") + unread
+    EndIf
+    Return out
+EndFunction
+
+; Сколько записей (строк с "|", не _comment) в asLines начиная с aiFrom. Без
+; разбора: только для сообщения о пределе, обычно хвост — пара скобок JSON.
+Int Function UnreadEntries(String[] asLines, Int aiFrom)
+    Int n = 0
+    Int k = aiFrom
+    While k < asLines.Length
+        If GardenOfEden.StrFind(asLines[k], "|") > 0 && GardenOfEden.StrFind(asLines[k], "_comment") == 0
+            n += 1
+        EndIf
+        k += 1
+    EndWhile
+    Return n
 EndFunction
 
 ; "" — строка добавлена (или заменила прежнюю для того же предмета); иначе ошибка.
@@ -2559,7 +2751,7 @@ String Function ParseUserRow(Form akItem, Int aiLocalId, String[] asParts, AutoM
     Else
         akRows.Add(row, 1)
     EndIf
-    LogAt(LOG_DETAILED, "  + " + asParts[0] + "|" + asParts[1] + ": " + UserRowText(row))
+    LogAtR(LOG_DETAILED, "  + " + asParts[0] + "|" + asParts[1] + ": " + UserRowText(row))
     Return ""
 EndFunction
 
@@ -2605,9 +2797,9 @@ EndFunction
 
 ; Кнопка MCM «Перечитать свои предметы». НЕ ПЕРЕИМЕНОВЫВАТЬ.
 Function McmReloadUserItems()
-    LoadUserItems()
+    LoadUserItems(true)
     FlushLog()
-    Debug.Notification("AutoMedic: " + TB_Items3.Length + T(" of your items", " своих предметов"))
+    Debug.Notification("AutoMedic: " + TB_UserItems.Length + T(" of your items", " своих предметов"))
 EndFunction
 
 String Function RemoveAll(String asText, String asWhat, String asWith = "")
@@ -3480,14 +3672,14 @@ EndFunction
 
 ; Как AutoMedicTables.IndexOf(Form), но по локальной копии таблицы.
 Int Function IndexOfFormL(Form akItem)
-    If TB_Items3 != None
-        Int user = TB_Items3.FindStruct("Item", akItem, 0)
+    If TB_UserItems != None
+        Int user = TB_UserItems.FindStruct("Item", akItem, 0)
         If user >= 0
             Return TB_UserChunk * TB_ChunkSize + user
         EndIf
     EndIf
     Int chunk = 0
-    While chunk < 3
+    While chunk < TB_ItemChunks
         AutoMedicTables:ItemData[] rows = ItemChunkL(chunk)
         If rows != None
             Int slot = rows.FindStruct("Item", akItem, 0)

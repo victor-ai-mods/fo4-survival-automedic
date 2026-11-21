@@ -232,13 +232,15 @@ Function BuildTables(Bool abForce = false)
     EndWhile
 
     String[] files = PluginFiles()
-    ; Индекс загрузки каждого файла; -1 — ещё не найден (или файла нет).
-    Int[] loadIndex = new Int[files.Length]
-    Int f = 0
-    While f < files.Length
-        loadIndex[f] = -1
-        f += 1
-    EndWhile
+    ; Состояние файла: 0 — ещё не проверяли, -1 — файла нет в порядке загрузки
+    ; (его строки пропускаются без GetFormFromFile: тот на каждую пишет в лог
+    ; Papyrus предупреждение, а строк CC — полсотни), 1 — файл есть, 2 — и
+    ; известно начало его FormID (fileBase).
+    Int[] fileState = new Int[files.Length]
+    ; Полный FormID минус локальный у первой разрешившейся строки файла:
+    ; XX000000 у обычного плагина, FEXXX000 у лёгкого (ESL; у них LocalId < 0x1000,
+    ; это проверяет генератор), так что FullId = fileBase + LocalId.
+    Int[] fileBase = new Int[files.Length]
     Int chunk = 0
     While chunk < ITEM_CHUNKS
         ItemData[] rows = RawItems(chunk)
@@ -251,18 +253,33 @@ Function BuildTables(Bool abForce = false)
         EndWhile
         Int i = 0
         While i < rows.Length
-            Form found = Game.GetFormFromFile(rows[i].LocalId, files[rows[i].PluginId])
+            Int pid = rows[i].PluginId
+            If fileState[pid] == 0
+                If Game.IsPluginInstalled(files[pid])
+                    fileState[pid] = 1
+                Else
+                    fileState[pid] = -1
+                EndIf
+            EndIf
+            Form found = None
+            If fileState[pid] > 0
+                found = Game.GetFormFromFile(rows[i].LocalId, files[pid])
+            EndIf
             If found != None
                 rows[i].Item = found
-                Int pid = rows[i].PluginId
-                If loadIndex[pid] < 0
-                    loadIndex[pid] = FindLoadIndex(found, rows[i].LocalId)
+                If fileState[pid] == 1
+                    ; F4SE Form.GetFormID — полный FormID с индексом загрузки, и у
+                    ; обычного плагина (XX______), и у лёгкого ESL (FEXXX___). Один вызов
+                    ; на файл: на каждую строку он ждёт кадра (сборка 406 строк шла 45 с
+                    ; вместо ~15). До 1.7.1 индекс искали перебором Game.GetForm(XX000000 +
+                    ; LocalId), а у ESL такого FormID нет (2026-11-21, предметы Creation Club).
+                    fileBase[pid] = found.GetFormID() - rows[i].LocalId
+                    fileState[pid] = 2
+                    If fileBase[pid] + rows[i].LocalId == 0
+                        AM_NoFullId += 1
+                    EndIf
                 EndIf
-                If loadIndex[pid] >= 0
-                    rows[i].FullId = loadIndex[pid] * 16777216 + rows[i].LocalId
-                Else
-                    AM_NoFullId += 1
-                EndIf
+                rows[i].FullId = fileBase[pid] + rows[i].LocalId
                 AM_AllConsumables.AddForm(found)
                 AddToNeedLists(found, rows[i])
                 AM_Resolved += 1
@@ -279,7 +296,17 @@ Function BuildTables(Bool abForce = false)
     AM_Effects = RawEffects()
     Int e = 0
     While e < AM_Effects.Length
-        AM_Effects[e].Effect = Game.GetFormFromFile(AM_Effects[e].LocalId,                                                     files[AM_Effects[e].PluginId]) as MagicEffect
+        Int epid = AM_Effects[e].PluginId
+        If fileState[epid] == 0
+            If Game.IsPluginInstalled(files[epid])
+                fileState[epid] = 1
+            Else
+                fileState[epid] = -1
+            EndIf
+        EndIf
+        If fileState[epid] > 0
+            AM_Effects[e].Effect = Game.GetFormFromFile(AM_Effects[e].LocalId, files[epid]) as MagicEffect
+        EndIf
         e += 1
     EndWhile
 
@@ -362,22 +389,6 @@ FormList Function NeedList(Int aiUse)
     Return None
 EndFunction
 
-; Индекс загрузки файла, которому принадлежит akFound: перебор старшего
-; байта, пока Game.GetForm(полный ID) не вернёт ту же форму. Узнать FormID
-; формы напрямую нельзя — Form.GetFormID есть только в F4SE, а его исходников
-; в сборке нет. Файлы таблицы — только .esm (Fallout4 и DLC), они грузятся
-; первыми, так что это единицы вызовов на файл. -1 — не нашли.
-Int Function FindLoadIndex(Form akFound, Int aiLocalId)
-    Int idx = 0
-    While idx < 254
-        If Game.GetForm(idx * 16777216 + aiLocalId) == akFound
-            Return idx
-        EndIf
-        idx += 1
-    EndWhile
-    Return -1
-EndFunction
-
 ; =====================================================================
 ;  Предметы игрока (Data\SurvivalAutoMedic\items-user.json, 2026-09-30)
 ; =====================================================================
@@ -391,8 +402,8 @@ EndFunction
 ; игрока может заменить числа и у предмета из таблицы (мод, меняющий ванильный
 ; предмет). Вариантов по перкам у них нет.
 
-; Генератор проверяет, что основных чанков не больше трёх, так что 3 свободен.
-Int Property USER_CHUNK = 3 AutoReadOnly Hidden
+; USER_CHUNK — в размерах таблицы выше: генератор ставит его за последним
+; чанком, который кеширует AutoMedicQuestScript (4 с версии 1.7.1, было 3).
 Int Property USER_MAX = 128 AutoReadOnly Hidden
 
 ItemData[] AM_UserItems
@@ -430,6 +441,20 @@ Function SetUserItems(ItemData[] akRows)
     While i < akRows.Length
         AM_AllConsumables.AddForm(akRows[i].Item)
         AddToNeedLists(akRows[i].Item, akRows[i])
+        i += 1
+    EndWhile
+EndFunction
+
+; Предметы игрока снова в списки после пересборки таблицы (её Revert их убрал),
+; без разбора файла заново: путь кеша AutoMedicQuestScript.LoadUserItems (1.7.1).
+Function AddUserItemsToLists()
+    ItemData[] rows = UserItems()
+    Int i = 0
+    While i < rows.Length
+        If rows[i].Item != None
+            AM_AllConsumables.AddForm(rows[i].Item)
+            AddToNeedLists(rows[i].Item, rows[i])
+        EndIf
         i += 1
     EndWhile
 EndFunction

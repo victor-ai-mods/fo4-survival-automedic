@@ -62,7 +62,10 @@ If F4SE or Garden of Eden is missing (or built for another game version), AutoMe
 message box when a save loads and when you use the item, instead of silently doing nothing.
 
 **No DLC required.** Items from DLC you own are supported; items from DLC you do not own are
-skipped silently. One plugin, one master (`Fallout4.esm`).
+skipped silently. The same goes for Creation Club: the table knows the 53 consumables of the six
+Creation Club packs that have any (Slocum's Joe, Halloween Workshop, Manwell Rifle Set,
+Captain's Hat Mercenaries, Disintegrate, Astronaut Power Armor; since 1.7.1). One plugin, one
+master (`Fallout4.esm`).
 
 ## Settings
 
@@ -93,6 +96,17 @@ thirst, category and disease risk are read from
 the item's keywords. An entry for an item the mod already knows replaces its numbers. With
 the log at Detailed, items in your inventory that the mod does not know are listed as ready
 `Plugin.esp|ID` entries.
+
+The file holds up to 128 items, and reading it is slow: every entry takes Papyrus one to three
+seconds (it waits for a frame on each of about a hundred engine calls), so a full file takes a
+few minutes in the background. List only what you actually use; vanilla, DLC and Creation Club
+items are already in the table. Since 1.7.1:
+
+- the mod stops reading at the limit and writes one line to the log about the rest (before,
+  every extra line was still checked and only then skipped);
+- the file is read again at a game load only if it has changed (or a plugin it names was added
+  or removed); otherwise the entries come from the save in a moment. The MCM button
+  "Reload your items" always rereads it.
 
 English and Russian are included. A new language is one file in
 `Interface\Translations\` (UTF-16 LE with BOM, TAB-separated); nothing needs recompiling.

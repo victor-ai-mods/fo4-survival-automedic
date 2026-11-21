@@ -55,6 +55,23 @@ PATCH_PLUGINS = [
     'Unofficial Fallout 4 Patch.esp',
 ]
 
+# Creation Club (2026-11-21, 1.7.1): расходуемые предметы CC-плагинов. Из 173
+# CC Anniversary Edition ALCH есть только у этих шести, и все они — новые
+# записи (ванильных не переопределяют, мастер один — Fallout4.esm). В игре у
+# основной массы этих плагинов нет — строка таблицы тогда молча пропускается,
+# как предмет неустановленного DLC. Разбираются по AE-установке (в OG-игре CC
+# нет) вместе с ЕЁ Fallout4.esm, под которую они собраны. Имена — как в
+# Fallout4.ccc: так их видит Game.GetFormFromFile.
+CC_DATA = r'D:\Games\F4_AE\Data'
+CC_PLUGINS = [
+    'ccFSVFO4003-Slocum.esl',
+    'ccSWKFO4001-AstronautPowerArmor.esm',
+    'ccRZRFO4002-Disintegrate.esl',
+    'ccFSVFO4007-Halloween.esl',
+    'ccSBJFO4002_ManwellRifle.esl',
+    'ccBGSFO4117-CapMerc.esl',
+]
+
 # BA2 со строковыми таблицами: имена предметов локализованы, в FULL лежит id.
 STRING_ARCHIVES = {
     'Fallout4.esm': ('Fallout4 - Interface.ba2', 'fallout4'),
@@ -110,6 +127,10 @@ BLACKLIST_EDIDS = {
     # Нетронутое яйцо когтя смерти — квест Веллингема (MS05B). Лечит, стоит 69
     # крышек, и планировщик без запрета брал его на ОЗ (2026-10-17).
     'MS05BEggDeathclaw',
+    # Концентрированная Ядер-Кола Квантум из CC «Винтовка Мэнвелла» (2026-11-21):
+    # редкая, как и обычная Квантум; лечит 800 ОЗ и стоит 50 крышек — без запрета
+    # планировщик выпил бы её на лечение.
+    'ccSBJFO4002_NukaColaQuantum',
 }
 
 # §2.3 M13: травяные снадобья применяются только в окне 1 игрового часа
@@ -762,9 +783,42 @@ def build_items(plugins, names_en, names_ru):
     return items, mgef_index
 
 
+def build_cc_items(cc_data):
+    """
+    Предметы CC_PLUGINS -> (items, mgef_index, [имена найденных плагинов]).
+
+    Один проход по AE-шному Fallout4.esm + всем CC сразу: друг друга CC не
+    переопределяют. Из результата берутся только собственные записи CC.
+    """
+    on_disk = {name.lower(): name for name in os.listdir(cc_data)}
+    base_path = os.path.join(cc_data, 'Fallout4.esm')
+    if not os.path.exists(base_path):
+        sys.exit('нет %s: предметы CC разбираются по AE-установке (--cc-data)' % base_path)
+    plugins = [Plugin(base_path)]
+    names_en, names_ru = {}, {}
+    found = []
+    for name in CC_PLUGINS:
+        real = on_disk.get(name.lower())
+        if real is None:
+            sys.exit('нет %s в %s' % (name, cc_data))
+        plugins.append(Plugin(os.path.join(cc_data, real), name=name))
+        found.append(name)
+        stem = os.path.splitext(name)[0]
+        archive = on_disk.get((stem + ' - main.ba2').lower())
+        if archive:
+            arc = BA2(os.path.join(cc_data, archive))
+            names_en[name] = strings_file.load_from_ba2(arc, stem, 'en')
+            names_ru[name] = strings_file.load_from_ba2(arc, stem, 'ru')
+    items, mgef_index = build_items(plugins, names_en, names_ru)
+    cc = {k: it for k, it in items.items() if it['file'] in found}
+    return cc, mgef_index, found
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--data', default=DEFAULT_DATA, help='папка Data игры')
+    ap.add_argument('--cc-data', default=CC_DATA,
+                    help='папка Data AE-установки с Creation Club (пусто — без CC)')
     ap.add_argument('--out', default=os.path.join(PROJECT, 'data'))
     ap.add_argument('--reports', default=os.path.join(PROJECT, 'reports'))
     args = ap.parse_args()
@@ -806,6 +860,20 @@ def main():
         print('  слой %s: %d предметов (%d новых)'
               % (patch_name, len(rows), sum(1 for it in rows if it['key'] not in items)))
 
+    # Creation Club: обычные строки основной таблицы, идут после ванили и DLC.
+    plugin_names = [p.name for p in plugins]
+    vanilla_items = dict(items)
+    if args.cc_data:
+        print('Читаю Creation Club (%s)...' % args.cc_data)
+        cc_items, cc_mgef, cc_files = build_cc_items(args.cc_data)
+        for key, info in cc_mgef.items():
+            mgef_index.setdefault(key, info)
+        items.update(cc_items)
+        plugin_names += cc_files
+        print('  предметов CC: %d (%s)' % (len(cc_items), ', '.join(
+            '%s %d' % (f, sum(1 for it in cc_items.values() if it['file'] == f))
+            for f in cc_files)))
+
     # В индекс эффектов пишем только то, что реально встречается у предметов, —
     # иначе в файл уедут все 800+ эффектов игры.
     used = {e['mgef'] for it in items.values() for e in it['effects']}
@@ -817,7 +885,7 @@ def main():
     os.makedirs(args.reports, exist_ok=True)
 
     with open(os.path.join(args.out, 'consumables.json'), 'w', encoding='utf-8') as fh:
-        json.dump({'plugins': [p.name for p in plugins],
+        json.dump({'plugins': plugin_names,
                    'items': [items[k] for k in sorted(items)],
                    'patches': patches},
                   fh, ensure_ascii=False, indent=1)
@@ -834,9 +902,10 @@ def main():
     else:
         print('  ! копия вики не найдена: %s' % wiki_path)
 
-    matched, missing, diffs, percent_rows = compare_with_wiki(items, wiki_rows)
+    # Сверка и отчёт — по ванили и DLC: CC в вики-таблице нет.
+    matched, missing, diffs, percent_rows = compare_with_wiki(vanilla_items, wiki_rows)
     write_report(os.path.join(args.reports, 'wiki_diff.md'),
-                 items, mgef_index, wiki_rows, matched, missing, diffs, percent_rows)
+                 vanilla_items, mgef_index, wiki_rows, matched, missing, diffs, percent_rows)
     print('  сопоставлено %d, расхождений %d' % (len(matched), len(diffs)))
     print('Готово.')
 
