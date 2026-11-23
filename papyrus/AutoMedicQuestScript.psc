@@ -2462,10 +2462,12 @@ Function LoadUserItems(Bool abForce = false, Bool abListsReset = false)
     EndIf
     TB_UserItems = t.UserItems()
     UL_Forms = new Form[0]
+    UL_Secs = new Float[0]
     Int i = 0
     While i < rows.Length
         If Has(rows[i].Flags, t.FLAG_HEALS_LIMBS)
             UL_Forms.Add(rows[i].Item)
+            UL_Secs.Add(rows[i].HealSeconds)
         EndIf
         i += 1
     EndWhile
@@ -2477,9 +2479,17 @@ String Property USER_ITEMS_FILE = "items-user.json" AutoReadOnly Hidden
 ; Предметы игрока с флагом limbs: по ним ReadActiveEffects видит, что такой
 ; предмет ещё действует (S_LimbItemActive). None/пусто — флагов нет.
 Form[] UL_Forms
+; sec= тех же строк (параллельно UL_Forms): сколько секунд предмет лечит
+; конечности; 0 — мгновенно (sec не указан). Предмет «ещё лечит», пока с его
+; применения прошло меньше sec. До 1.7.2 считался любой эффект предмета, а у
+; бинтов из модов бывает попутный бафф: CHAOTIC SUN — Fortify Bleed Resist на
+; 300 с при мгновенном лечении конечностей, и 5 минут второй бинт не брался
+; (Nexus cmdgz123, 2026-11-23). Какое AV меняет эффект, GOEPE и F4SE не отдают.
+Float[] UL_Secs
 
 Bool Function HasUserLimbItems()
-    Return UL_Forms != None && UL_Forms.Length > 0
+    ; UL_Secs == None — сохранение 1.7.0/1.7.1, LoadUserItems ещё не прошёл.
+    Return UL_Forms != None && UL_Forms.Length > 0 && UL_Secs != None
 EndFunction
 
 ; Версия разбора items-user.json: поднять при любой правке ReadUserItems /
@@ -3185,8 +3195,11 @@ Function ReadActiveEffects(Actor akPlayer)
                 left = 0.0
             EndIf
             Float rest = ae.fMagnitude * left
-            If limbItems && left > 0.0 && !S_LimbItemActive && UL_Forms.Find(ae.MagicItem) >= 0
-                S_LimbItemActive = true
+            If limbItems && !S_LimbItemActive
+                Int u = UL_Forms.Find(ae.MagicItem)
+                If u >= 0 && u < UL_Secs.Length && ae.fElapsedTime < UL_Secs[u]
+                    S_LimbItemActive = true
+                EndIf
             EndIf
             If role == TR_HEAL_HP
                 ; В сумму — после цикла, за вычетом вариантов по перку (HealVariants).

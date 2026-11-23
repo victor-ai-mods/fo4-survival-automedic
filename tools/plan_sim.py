@@ -122,8 +122,11 @@ class Player:
         self.immuno = kw.get('immuno', False)
         self.in_heal = kw.get('in_heal', 0.0)
         self.in_heal_pct = kw.get('in_heal_pct', 0.0)
-        # S_LimbItemActive: у предмета с флагом limbs ещё идёт эффект.
-        self.limb_item_active = kw.get('limb_item_active', False)
+        # S_LimbItemActive: предмет с флагом limbs ещё лечит — его эффект в снимке и
+        # с применения прошло меньше sec его строки (с 1.7.2; без sec — мгновенный).
+        # limb_effects — [(fElapsedTime, sec строки)] эффектов предметов limbs в снимке.
+        self.limb_item_active = kw.get('limb_item_active', False) or any(
+            elapsed < sec for elapsed, sec in kw.get('limb_effects', ()))
         self.in_rad_out = kw.get('in_rad_out', 0.0)
         self.in_damage = 0.0
         self.perks = set(kw.get('perks', ()))
@@ -994,6 +997,15 @@ SCENARIOS = [
     ('L5. Бинтов нет — стимпак, как в ситуации 3',
      dict(limbs=1), {'Stimpak': 5},
      {('Stimpak', 'limbs'): 1}),
+    # --- 2026-11-23 (1.7.2): «ещё лечит» — по sec строки, а не по любому эффекту ---
+    ('L6. Бинт без sec, его бафф идёт 20 с из 300 (CHAOTIC SUN) — второй бинт берётся',
+     dict(limbs=2, limb_effects=[(20.0, 0.0)]), {'Stimpak': 5, 'Bandage': 3},
+     {('Bandage', 'limbs'): 1}),
+    ('L7. Бинт sec=10, с применения 4 с — ждём',
+     dict(limbs=1, limb_effects=[(4.0, 10.0)]), {'Stimpak': 5, 'Bandage': 3}, {}),
+    ('L8. Бинт sec=10, прошло 12 с, эффект ещё идёт — второй бинт берётся',
+     dict(limbs=1, limb_effects=[(12.0, 10.0)]), {'Stimpak': 5, 'Bandage': 3},
+     {('Bandage', 'limbs'): 1}),
 ]
 
 
